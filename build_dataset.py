@@ -8,7 +8,7 @@ class CFG:
     SEED: int = 42
     SEQ_LEN: int = 8192
     NUM_CPU: int = multiprocessing.cpu_count()
-    HF_ACCOUNT_REPO: str = "YOUR HF ACCOUNT"
+    HF_ACCOUNT_REPO: str = "tmabraham"
     TOKENIZER: str = "meta-llama/Llama2-7b-hf"
     DATASET_NAME: str = "CarperAI/pilev2-dev"
 
