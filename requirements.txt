@@ -1,2 +1,14 @@
 transformers
 datasets
+tqdm
+selenium
+jupyter
+black
+autopep8
+pandas
+markdownify
+autoscraper
+webdriver-manager
+spacy
+langdetect
+pypdf2
