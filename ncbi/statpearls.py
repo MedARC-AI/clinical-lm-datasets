@@ -29,9 +29,10 @@ def extract_data(link):
     references_match = re.search(r'\nreferences\n', result, flags=re.IGNORECASE)
 
     assert 'StatPearls [Internet].Show details' in result
-    if not references_match or not end_of_headers:
+    if references_match is None:
         print(result)
-        raise
+        references_match = re.search(r'\ndisclosure:', result, flags=re.IGNORECASE)
+
     result_trunc = result[end_of_headers.end():references_match.start()].strip()
     result_trunc = clean(result_trunc)
 

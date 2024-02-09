@@ -3,7 +3,7 @@
 | Category          | Counts | Include  | Comments                                          |
 | ----------------- | ------ | -------- | ------------------------------------------------- |
 | Nursing/other     | 82,2497 | No      | Choppy, should be in dsum                         |
-| Radiology         | 522,279 | **Yes** | Use Impressions and Findings (downsample?)        |
+| Radiology         | 522,279 | **Yes** | Take everything after "FINAL REPORT"              |
 | Nursing           | 223,556 | No      | See above                                         |
 | ECG               | 209,051 | No      | Very repetitive and short                         |
 | Physician         | 141,624 | No      | Seem like Progress Notes. Lot of lab values.      |
@@ -19,3 +19,8 @@
 | Consult           | 98      | **Yes** | Quality (dedup w dsum)                            |
 
 # MIMIC-IV
+
+| Category          | Counts | Include  | Comments                                   |
+| ----------------- | ------ | -------- | ------------------------------------------ |
+| Radiology Reports | xx     | **Yes**  | Use Impressions and Findings (downsample?) |
+| Discharge Summary | xx     | **Yes**  | Summary of previous notes.                 |

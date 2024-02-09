@@ -561,6 +561,7 @@ class GCScraper(Scraper):
     def scrape_links(self):
         url = "https://www.guidelinecentral.com/guidelines/?t=guideline&f=%7B%22sort%22%3A%7B%22type%22%3A%22relevance%22%2C%22order%22%3A%22desc%22%7D%2C%22range%22%3A%7B%22max%22%3A0%2C%22start%22%3A0%2C%22limit%22%3A20%7D%2C%22filters%22%3A%5B%7B%22searchType%22%3A%22guideline%22%2C%22name%22%3A%22Within%2010%20Years%20(1766)%22%2C%22type%22%3A%22within10Years%22%2C%22syntax%22%3A%22docPubDate%3A%5BNOW-10YEAR%20TO%20NOW%5D%22%7D%5D%2C%22state%22%3A%22guidelines_landing_search%22%2C%22term%22%3A%22contentType%3ADOCUMENT%22%7D"
         self.driver.get(url)
+        time.sleep(10)
         links = []
         while True:
             try:
@@ -570,7 +571,7 @@ class GCScraper(Scraper):
                 link = [href.get_attribute("href") for href in hrefs]
                 links.extend(link)
                 next_page = wait.until(EC.presence_of_element_located((
-                    By.XPATH, "//a[@class='page-link next-page-of-results']")))
+                    By.XPATH, "//a[@class='next-page-of-results']")))
                 next_page.click()
                 time.sleep(5)
             except NoSuchElementException:
