@@ -1,3 +1,4 @@
+beautifulsoup4
 transformers
 datasets
 tqdm
@@ -12,3 +13,4 @@ webdriver-manager
 spacy
 langdetect
 pypdf2
+vllm

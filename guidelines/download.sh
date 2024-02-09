@@ -13,8 +13,8 @@ echo "1. Scraping guidelines..."
 echo "1. a) Running 12/16 Chrome-based scrapers..."
 # Downloads guidelines from each source to {PATH_TO_SCRAPERS}/raw/{source}.jsonl
 # You can download specific sources by adding them to the --sources flag
-python scrapers/scrapers.py \
-    --path $PATH_TO_SCRAPERS \
+#python scrapers/scrapers.py \
+#    --path $PATH_TO_SCRAPERS \
 #    --sources aafp cco cdc cma cps drugs guidelinecentral icrc idsa magic spor who
 
 echo "\n1. b) Running 4/16 Typescript-based scrapers..."

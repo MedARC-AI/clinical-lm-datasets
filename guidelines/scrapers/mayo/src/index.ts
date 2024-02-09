@@ -23,7 +23,7 @@ const VERBOSE = true;
 const HEADLESS = true;
 const TIMEOUT = 200;
 
-const TOC_RESULT_ITEM_SELECTOR:string = "div.cmp-back-to-top-container div.cmp-result-name div.cmp-link a";    // Top-level TOC items
+const TOC_RESULT_ITEM_SELECTOR:string = "div.cmp-link a";    // Top-level TOC items
 const PAGE_SECTION_SELECTOR:string = "#access-nav a, div.cmp-tab-navigation-tabs a";        // Links to page sections
 const CONTENT_SUBSELECTORS = [`li`, `h2`, `p`]; // Subselectors for content
 
@@ -205,6 +205,8 @@ class PuppeteerRun{
               }
             }
           }
+        } else {
+          console.log(TOC_RESULT_ITEM_SELECTOR + "not found!")
         }
       }
     }

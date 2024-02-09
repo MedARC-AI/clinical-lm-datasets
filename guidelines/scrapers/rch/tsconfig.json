@@ -10,7 +10,7 @@
 "esModuleInterop": true,
 "forceConsistentCasingInFileNames": true,
     "outDir": "js",
-    "moduleResolution": "node",
+    "moduleResolution": "node16",
     "allowJs": true
   },
   "files":[

@@ -1,12 +1,13 @@
 import pandas as pd
 import regex as re
 
-from mimic.constants import MIMIC_III_NOTES
+from constants import MIMIC_III_NOTES
 
 
 BLACKLIST_CATEGORIES = [
     'Nursing/other',
-    'Nursing'
+    'Nursing',
+    'Case Management'
 ]
 
 FILTERED_NOTES_FN = MIMIC_III_NOTES.replace('.csv', '') + '_note_filtered.csv'
@@ -20,6 +21,9 @@ def compute_token_count(text):
 if __name__ == '__main__':
     print(f'Reading in notes from {MIMIC_III_NOTES}...')
     notes = pd.read_csv(MIMIC_III_NOTES)
+    notes = notes[notes['ISERROR'].isnull()]
+    # some categories have trailing spaces
+    notes['CATEGORY'] = notes['CATEGORY'].apply(lambda cat: cat.strip()) 
     orig = len(notes)
 
     # Including token counts
