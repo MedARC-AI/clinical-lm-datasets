@@ -7,7 +7,6 @@ PATH_TO_SCRAPERS='~/Desktop/guidelines'               # Path to scrapers directo
 PATH_TO_RAW=$PATH_TO_SCRAPERS"/raw"        # Raw scraped guidelines directory
 PATH_TO_CLEAN=$PATH_TO_SCRAPERS"/clean"    # Clean guidelines directory
 
-
 echo "1. Scraping guidelines..."
 
 echo "1. a) Running 12/16 Chrome-based scrapers..."
