@@ -14,3 +14,4 @@ spacy
 langdetect
 pypdf2
 vllm
+git+https://github.com/titipata/scipdf_parser
