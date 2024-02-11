@@ -1,6 +1,6 @@
 import pandas as pd
 
-from note_filter import FILTERED_NOTES_FN
+from mimic.combine import FILTERED_NOTES_FN
 from utils import clean_mimic
 
 from vllm import LLM, SamplingParams
