@@ -35,14 +35,14 @@ if __name__ == '__main__':
         print(f'Adding {len(sub)} {category} notes from MIMIC-III')
         for row in sub.to_dict('records'):
             out_row = {
-                'id': row['ROW_ID'],
+                'id': str(round(row['ROW_ID'])),
                 'version': 'mimic_iii',
                 'note_type': row['CATEGORY'],
                 'patient_id': str(round(row['SUBJECT_ID'])),
                 'visit_id': str(round(row['HADM_ID'])),
                 'text': row['TEXT'].strip(),
                 'date': row['CHARTDATE'],
-                'time': row['CHARTTIME'],
+                'time': str(row['CHARTTIME']),
             }
 
             outputs.append(out_row)
@@ -55,11 +55,10 @@ if __name__ == '__main__':
             'id': dsum['note_id'],
             'version': 'mimic_iv',
             'note_type': 'Discharge Summary',
-            'patient_id': out_row['subject_id'],
-            'visit_id': out_row['hadm_id'],
-            'text': out_row['text'],
-            'time': out_row['charttime'],
-            'note_seq': out_row['note_seq']  # What is this?
+            'patient_id': str(round(dsum['subject_id'])),
+            'visit_id': str(round(dsum['hadm_id'])),
+            'text': dsum['text'],
+            'time': str(dsum['charttime']),
         }
 
         outputs.append(out_row)
@@ -72,11 +71,10 @@ if __name__ == '__main__':
             'id': dsum['note_id'],
             'version': 'mimic_iv',
             'note_type': 'Radiology',
-            'patient_id': out_row['subject_id'],
-            'visit_id': out_row['hadm_id'],
-            'text': out_row['text'],
-            'time': out_row['charttime'],
-            'note_seq': out_row['note_seq']  # What is this?
+            'patient_id': str(round(dsum['subject_id'])),
+            'visit_id': str(round(dsum['hadm_id'])),
+            'text': dsum['text'],
+            'time': str(dsum['charttime']),
         }
 
         outputs.append(out_row)
