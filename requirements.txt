@@ -1,3 +1,4 @@
+autoscraper
 beautifulsoup4
 transformers
 datasets
@@ -8,10 +9,10 @@ black
 autopep8
 pandas
 markdownify
-autoscraper
+nltk
 webdriver-manager
 spacy
+scispacy
 langdetect
 pypdf2
 vllm
-git+https://github.com/titipata/scipdf_parser

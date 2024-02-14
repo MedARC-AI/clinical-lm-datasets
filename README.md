@@ -2,9 +2,12 @@
 
 ## Setup
 
-`pip install -e .`
-
-`python -m spacy download en_core_web_sm`
+```
+pip install -e .
+python -m spacy download en_core_web_sm
+pip install git+https://github.com/titipata/scipdf_parser
+pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.3/en_core_sci_sm-0.5.3.tar.gz
+```
 
 ## Downloading guidelines
 
