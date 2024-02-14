@@ -62,7 +62,7 @@ if __name__ == '__main__':
                 lines.append('\n## ' + child.text.strip())
             elif child.name == 'p':
                 lines.append(child.text.strip())
-            elif child.name == 'ul':
+            elif child.name in {'ul', 'ol'}:
                 for item in child.find_all('li'):
                     lines.append(f'- {item.text.strip()}')
 
