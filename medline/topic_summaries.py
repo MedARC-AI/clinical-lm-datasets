@@ -67,7 +67,7 @@ if __name__ == '__main__':
                     lines.append(f'- {item.text.strip()}')
 
         text = '\n'.join(lines)
-        text = re.sub('\n\n\n', '\n\n', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
         num_tokens = len(re.split(r'\W+', text))
 
         if num_tokens < MIN_SUMMARY_TOKENS:
