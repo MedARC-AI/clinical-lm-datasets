@@ -15,4 +15,5 @@ spacy
 scispacy
 langdetect
 pypdf2
+transformers
 vllm

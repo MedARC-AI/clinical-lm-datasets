@@ -28,11 +28,11 @@ CONFIGS = [
     #     hf_path='medalpaca/medical_meadow_wikidoc',
     #     instruction='As a contributor to WikiDoc, ask a medical question and provide a paragraph-long answer.'
     # ),
-    MEDALPACA_CONFIG(
-        name='stack_exchange',
-        hf_path='medalpaca/xx',
-        instruction='As a contributor to Stack Exchange, ask a medical question and provide a top-rated answer.'
-    )
+    # MEDALPACA_CONFIG(
+    #     name='stack_exchange',
+    #     hf_path='medalpaca/xx',
+    #     instruction='As a contributor to Stack Exchange, ask a medical question and provide a top-rated answer.'
+    # )
 ]
 
 if __name__ == '__main__':

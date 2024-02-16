@@ -1,7 +1,7 @@
 import pandas as pd
 
 
-UMLS_MR_CONSO = '/weka/home-griffin/clinical_pile/umls/MRCONSO.RRF'
+UMLS_MR_CONSO_FN = '/weka/home-griffin/clinical_pile/umls/MRCONSO.RRF'
 
 
 if __name__ == '__main__':
@@ -26,10 +26,9 @@ if __name__ == '__main__':
         'cvf'
     ]
 
-
     # 13,609,918
-    print(f'Loading in CUIS from {UMLS_MR_CONSO}')
-    cui_df = pd.read_csv(UMLS_MR_CONSO, names=columns, delimiter='|', index_col=False)
+    print(f'Loading in CUIS from {UMLS_MR_CONSO_FN}')
+    cui_df = pd.read_csv(UMLS_MR_CONSO_FN, names=columns, delimiter='|', index_col=False)
 
     # 8,603,906 rows
     eng = cui_df[cui_df['language'] == 'ENG']

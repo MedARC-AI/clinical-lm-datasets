@@ -195,10 +195,11 @@ if __name__ == '__main__':
 
     notes = notes.map(
         lambda row: filter_text(args, row, nlp),
-        num_proc=16
+        num_proc=32
     )
 
     notes = notes.filter(lambda row: row['text'] is not None)
+
     if not args.debug:
         OUT_DIR = os.path.join(MIMIC_DIR, 'dataset_hf')
         print(f'Saving {len(notes)} examples to {OUT_DIR}')
