@@ -38,5 +38,5 @@ CONFIGS = [
 if __name__ == '__main__':
     combined = []
 
-    for dataset in DATASETS:
+    for dataset in CONFIGS:
         pass

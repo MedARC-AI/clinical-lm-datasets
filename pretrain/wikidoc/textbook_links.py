@@ -122,7 +122,7 @@ if __name__ == '__main__':
         href = link.get('href')
         if href is None:
             continue
-        
+
         if href is not None and any([href.startswith(prefix) for prefix in PREFIXES]):
             chapter_hrefs = chapter_hrefs.union(set(extract_chapter_hrefs(href, seen=seen)))
 

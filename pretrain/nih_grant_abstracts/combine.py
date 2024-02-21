@@ -24,6 +24,7 @@ if __name__ == '__main__':
     total_token_ct = 0
     too_short = 0
     total_ct = 0
+
     for year, fn in zip(YEARS, fns):
         assert f'FY{year}' in fn
         print(f'Processing {fn}...')
@@ -33,12 +34,15 @@ if __name__ == '__main__':
             # Encoding errors in some of these file
             print(f'Could not read in {fn} regularly...')
             df = pd.read_csv(open(fn, encoding='utf8', errors='backslashreplace'))
-
         for row in df.drop_duplicates().dropna().to_dict('records'):
-            abstract = re.sub('\s+', ' ', row['ABSTRACT_TEXT']).strip()
+            abstract = row['ABSTRACT_TEXT']
+            abstract = abstract.replace('[unreadable]', '')
+            abstract = abstract.replace('DESCRIPTION (provided by applicant)', '')
+            abstract = re.sub('\s+', ' ', abstract).strip()
 
             total_ct += 1
             num_tokens = len(re.split('\W+', abstract))
+
             if num_tokens >= MIN_ABSTRACT_TOKENS:
                 combined_rows.append({
                     'id': str(year) + '_'+ str(row['APPLICATION_ID']),
@@ -51,6 +55,13 @@ if __name__ == '__main__':
 
     print(f'{too_short}/{total_ct} abstracts had fewer than {MIN_ABSTRACT_TOKENS} tokens.')
 
-    print(f'Saving {len(combined_rows)} rows ')
-    dataset = Dataset.from_list(combined_rows)
+    full_df = pd.DataFrame(combined_rows)
+    n = len(full_df)
+
+    full_df = full_df.drop_duplicates(subset=['text'])
+    deduped_n = len(full_df)
+    print(f'{deduped_n} / {n} left after removing exact match duplicate abstracts.')
+
+    dataset = Dataset.from_list(full_df.to_dict('records'))
+    print(f'Saving {len(dataset)} rows ')
     dataset.save_to_disk(NIH_DIR_HF)

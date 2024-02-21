@@ -44,6 +44,7 @@ if __name__ == '__main__':
     
     dataset = []
     seen = set()
+    seen_titles = set()
     for path in tqdm(chapter_links):
         response = requests.get(BASE_URL + path)
         # print('\n\n')
@@ -104,6 +105,10 @@ if __name__ == '__main__':
             clean_output = clean('\n\n'.join(outputs))
             num_tokens = len(re.split(r'\W+', clean_output))
 
+            if len(title) > 0:
+                assert title not in seen_titles
+                seen_titles.add(title)
+
             dataset.append({
                 'id': path,
                 'text': clean_output,
@@ -118,5 +123,6 @@ if __name__ == '__main__':
 
     hf_dir = os.path.join(OUT_DIR, 'dataset_hf')
     dataset = Dataset.from_list(dataset)
-    print(f'Saving {len(dataset)} chapters to {hf_dir}')
-    dataset.save_to_disk(hf_dir)
+    # TODO put back
+    # print(f'Saving {len(dataset)} chapters to {hf_dir}')
+    # dataset.save_to_disk(hf_dir)

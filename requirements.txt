@@ -1,6 +1,6 @@
 autoscraper
 beautifulsoup4
-transformers
+datatrove[processing]
 datasets
 tqdm
 selenium
@@ -8,12 +8,14 @@ jupyter
 black
 autopep8
 pandas
+ftfy
 markdownify
 nltk
 webdriver-manager
 spacy
 scispacy
 langdetect
+p-tqdm
 pypdf2
 transformers
 vllm

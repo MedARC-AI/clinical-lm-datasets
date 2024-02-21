@@ -1,0 +1,113 @@
+import os
+import json
+import regex as re
+import argparse
+from dataclasses import dataclass
+
+from datasets import concatenate_datasets, load_from_disk
+import pandas as pd
+
+
+BASE_DIR = '/weka/home-griffin/clinical_pile'
+OUT_DIR = os.path.join(BASE_DIR, 'v1')
+os.makedirs(OUT_DIR, exist_ok=True)
+
+
+@dataclass
+class Source:
+    name: str
+    hf_path: str
+
+
+SOURCES = [
+    Source(name='chemsum', hf_path='chemistry/dataset_hf'),
+    Source(name='guidelines', hf_path='guidelines/dataset_hf'),
+    Source(name='medline_plus_genes', hf_path='medline/genes_hf'),
+    Source(name='medline_plus_genetic_conditions', hf_path='medline/genetic_conditions_hf'),
+    Source(name='medline_plus_medical_tests', hf_path='medline/medical_tests_hf'),
+    Source(name='medline_plus_topic_summaries', hf_path='medline/topic_summaries_hf'),
+    Source(name='mimic', hf_path='mimic/dataset_hf'),
+    Source(name='ncbi_bookshelf', hf_path='ncbi_bookshelf/dataset_hf'),
+    Source(name='nih_grant_abstracts', hf_path='nih_grant_abstracts/dataset_hf'),
+    # Source(name='umls', hf_path='umls/definitions_dataset_hf'),
+    Source(name='wikidoc', hf_path='wikidoc/dataset_hf'),
+]
+
+
+MANDATORY_COLS = [
+    'id',
+    'text',
+    'num_tokens'
+]
+
+
+def get_token_ct(text):
+    return len(re.split(r'\W+', text))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('Combining individual dataset for Clinical PILE v1')
+
+    parser.add_argument('--hub_name', default=None, type=str)
+
+    args = parser.parse_args()
+
+    all_datasets = []
+    stats = []
+    for source in SOURCES:
+        in_dir = os.path.join(BASE_DIR, source.hf_path)
+        print(f'Loading {source.name} from {in_dir}')
+        dataset = load_from_disk(in_dir)
+        meta_cols = [x for x in dataset.features if x not in MANDATORY_COLS]
+
+        assert all([type(x) == str and len(x) > 0 for x in dataset['id']])
+        assert all([type(x) == str and len(x) > 0 for x in dataset['text']])
+
+        assert len(dataset) == len(set(dataset['id']))
+
+        if 'num_tokens' not in dataset.features:
+            print('Adding token counts which were missing...')
+            dataset = dataset.map(
+                lambda row: {'num_tokens': get_token_ct(row['text'])},
+                num_proc=16
+            )
+
+        if 'source' in meta_cols:
+            print('Existing source will get over-written!')
+
+        dataset = dataset.map(lambda _: {'source': source.name})
+
+        stats.append({
+            'source': source.name,
+            'path': in_dir,
+            'tokens': sum(dataset['num_tokens']),
+            'examples': len(dataset),
+        })
+
+        if len(meta_cols) > 0:
+            dataset = dataset.map(
+                lambda row: {'meta': json.dumps({k: row[k] for k in meta_cols})},
+                remove_columns=meta_cols,
+                num_proc=32
+            )
+
+        all_datasets.append(dataset)
+    
+    all_datasets = concatenate_datasets(all_datasets)
+    assert len(all_datasets) == len(set(all_datasets['id']))
+
+    out_dir = os.path.join(OUT_DIR, 'dataset_hf')
+
+    print(f'Saving {len(all_datasets)} examples to {out_dir}')
+    all_datasets.save_to_disk(out_dir)
+    
+    stats = pd.DataFrame(stats)
+    out_fn =  os.path.join(OUT_DIR, 'sources.csv')
+    print(f'Saving information on all {len(stats)} sources in Clinical PILE to {out_fn}')
+    stats.to_csv(out_fn, index=False)
+
+    print(stats[['source', 'examples', 'tokens']].sort_values(by='tokens', ascending=False).head(n=25))
+
+    if args.hub_name is not None:
+        print(f'Pushing PILE to HuggingFace Hub --> {args.hub_name}')
+        all_datasets.push_to_hub(args.hub_name)

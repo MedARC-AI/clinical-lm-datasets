@@ -7,6 +7,7 @@ def download_parquet_file(file_number, token):
     os.system(command)
     print(f'Downloaded PubMed_{file_number}.parquet')
 
+
 if __name__ == "__main__":
     HF_TOKEN = "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"  # Replace with your Hugging Face token
     start_file = 0

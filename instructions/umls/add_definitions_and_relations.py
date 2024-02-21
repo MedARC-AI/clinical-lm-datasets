@@ -2,8 +2,8 @@ import os
 from collections import defaultdict
 
 import argparse
+import numpy as np
 import pandas as pd
-
 
 BASE_DIR = '/weka/home-griffin/clinical_pile/umls'
 
@@ -40,10 +40,10 @@ def cui2definitions(rrf_dir, cuis_to_filter_for):
         def_str = ENGLISH_SOURCES[row['sab']] + ': ' + row['def']
         cui2def[row['cui']].append(def_str)
 
-    return def_df
+    return cui2def
 
 
-def extract_relations(rrf_dir, cuis_to_filter_for, cui2name):
+def cui2relations(rrf_dir, cuis_to_filter_for, cui2name):
     names = [
         'cui1',
         'aui1',
@@ -66,9 +66,8 @@ def extract_relations(rrf_dir, cuis_to_filter_for, cui2name):
     in_fn = os.path.join(rrf_dir, 'MRREL.RRF')
     print(f'Loading in Relations from {in_fn}...')
     rel_df = pd.read_csv(in_fn, delimiter='|', names=names, index_col=False)
-    rel_df = rel_df[rel_df['cui1'].isin(cuis_to_filter_for)]
-
     rel_df = rel_df.dropna(subset=['cui1', 'cui2', 'rela'])
+    rel_df = rel_df[rel_df['cui1'].isin(cuis_to_filter_for)]
 
     rel_df = rel_df[rel_df['sab'].isin(ENGLISH_SOURCES)]
     rel_df = rel_df[rel_df['rela'].apply(lambda label: len(label) > 0)]
@@ -84,47 +83,57 @@ def extract_relations(rrf_dir, cuis_to_filter_for, cui2name):
     print('Combining relation tuples into single string...')
     rel_df['rel_prompt_args'] = rel_df.apply(create_prompt, axis=1)
     print('Combining relations for same CUI...')
-    grouped = rel_df.groupby('cui1')['name'].apply(lambda x: ', '.join(x)).reset_index()
-    grouped.rename(columns={'cui1': 'cui'}, inplace=True)
-    return grouped[['cui', 'rel_prompt_args']]
+    rel_df = rel_df.groupby('cui1')['rel_prompt_args'].apply(lambda x: ', '.join(x)).reset_index()
+    rel_df.rename(columns={'cui1': 'cui'}, inplace=True)
+    return dict(zip(rel_df['cui'], rel_df['rel_prompt_args']))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Script to add metadata (TUIs, semantic groups) to raw CUIs.')
 
     parser.add_argument('--sources', default='all', choices=['all', 'level_0'])
+    parser.add_argument('--chunk', default=None, type=int)
+    parser.add_argument('--num_chunks', default=5, type=int)
 
     args = parser.parse_args()
 
     rrf_dir = os.path.join(BASE_DIR, args.sources)
     in_fn = os.path.join(rrf_dir, 'cui.csv')
-    out_fn = os.path.join(rrf_dir, 'cui_augmented.csv')
-    print(f'Will be saving output to {out_fn}')
 
     print(f'Reading in CUIs from {in_fn}')
     cui_df = pd.read_csv(in_fn)
     print(f'Loaded {len(cui_df)} CUIs from {in_fn}')
-
-    cui_set = set(cui_df['cui'])
     cui2name = dict(zip(cui_df['cui'], cui_df['name']))
 
-    cui2defs = cui2definitions(rrf_dir, cui_set)
-    relations_df = extract_relations(rrf_dir, cui_set, cui2name)
+    if args.chunk is None:
+        out_fn = os.path.join(rrf_dir, 'cui_definitions_and_relations.csv')
+    else:
+        all_idxs = np.arange(len(cui_df))
+        chunk_idxs = np.array_split(all_idxs, args.num_chunks)[args.chunk]
+        s, e = chunk_idxs[0], chunk_idxs[-1] + 1
+        print(f'Selecting CUIs {s}-{e} ({len(chunk_idxs)}).')
+        cui_df = cui_df.iloc[s:e]
+        out_fn = os.path.join(rrf_dir, f'cui_definitions_and_relations_{args.chunk}.csv')
 
-    print('Assigning definitions and relations to CUIs...')
+    print(f'Will be saving output to {out_fn}')
+    cui_set = set(cui_df['cui'])
+
+    print('Extracting definitions for CUIs')
+    cui2defs = cui2definitions(rrf_dir, cui_set)
+
+    cui2rels = cui2relations(rrf_dir, cui_set, cui2name)
+
+    print(f'Assigning definitions to {len(cui_df)} CUIs...')
     cui_df = cui_df.assign(
-        definitions=cui_df['cui'].apply(lambda cui: '\n'.join(cui2defs.get('cui', [])).strip()),
+        definitions=cui_df['cui'].apply(lambda cui: '\n'.join(cui2defs.get(cui, [])).strip()),
+        relations=cui_df['cui'].apply(lambda cui: cui2rels.get(cui, ''))
     )
 
-    cui_df = cui_df.join(relations_df, on='cui', how='left')
-
     print(f'Saving {len(cui_df)} to {out_fn}')
+    cui_df.to_csv(out_fn, index=False)
 
     def_ct = sum([1 if len(x) > 0 else 0 for x in cui_df['definitions'].str.len().tolist()])
     rel_ct = sum([1 if len(x) > 0 else 0 for x in cui_df['relations'].str.len().tolist()])
 
     print(f'{def_ct} CUIs have >= 1 definitions')
     print(f'{rel_ct} CUIs have >= 1 relationships')
-
-    print(f'Saving {len(cui_df)} to {out_fn}')
-    cui_df.to_csv(out_fn, index=False)

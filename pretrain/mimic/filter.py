@@ -107,7 +107,7 @@ def filtered_dsum(sections, nlp):
                 # TODO: Do an ent filter here too?
                 output_lines.append(sent)
             output_lines.append('')
-    
+
     return '\n'.join(output_lines)
 
 

@@ -10,6 +10,10 @@ OUT_DIR = '/weka/home-griffin/clinical_pile/chemistry'
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
+def get_token_ct(text):
+    return len(re.split(r'\W+', text))
+
+
 def clean(text):
     encoded = ftfy.fix_text(text.encode().decode('unicode_escape', 'ignore'))
     encoded = encoded.replace('Å', '').replace('À', '').replace('Â', '').replace('\ue103', 'f').replace('\ue104', 'fl').replace('\ue09d', 'ft')
@@ -34,6 +38,17 @@ def create_input(example):
     return out_str.strip()
 
 
+def process(row):
+    row['sections'] = clean(row['sections'])
+    text = create_input(row)
+    return {
+        'id': row['uuid'],
+        'journal': row['article_source'],
+        'num_tokens': len(re.split(r'\W+', text)),
+        'text': text
+    }
+
+
 if __name__ == '__main__':
     """
     Remove Pubmed from ChemSum
@@ -42,19 +57,18 @@ if __name__ == '__main__':
     dataset = load_dataset('griffin/ChemSum')
     concat_dataset = concatenate_datasets([dataset['train'], dataset['validation']])
 
-    rows = concat_dataset.filter(lambda row: 'pubmed' not in row['article_source'].lower())
+    concat_dataset = concat_dataset.filter(lambda row: 'pubmed' not in row['article_source'].lower())
 
-    out_data = []
-
-    for row in tqdm(rows):
-        row['sections'] = clean(row['sections'])
-        out_data.append({
-            'id': row['uuid'],
-            'article_source': row['article_source'],
-            'input': create_input(row)
-        })
+    remove_columns = ['uuid', 'abstract', 'source_toks', 'target_toks', 'compression', 'headers', 'sections', 'article_source']
     
+    out_data = concat_dataset.map(
+        process,
+        num_proc=16,
+        remove_columns=remove_columns,
+    )
+
     out_data = Dataset.from_list(out_data)
-    out_fn = os.path.join(OUT_DIR, 'dataset_hf')
+
+    out_fn = os.path.join(OUT_DIR, 'dataset_hf_v2')
     print(f'Saving {len(out_data)} examples to {out_fn}')
     out_data.save_to_disk(out_fn)
