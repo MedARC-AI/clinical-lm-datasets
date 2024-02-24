@@ -10,6 +10,16 @@ MIN_TOKENS = 50
 OUT_DIR = '/weka/home-griffin/clinical_pile/guidelines/dataset_hf'
 
 
+def add_double_hash_for_sections(text):
+    new_lines = []
+    for line in text.split('\n'):
+        if line.startswith('#'):
+            new_lines.append('#' + line)
+        else:
+            new_lines.append(line)
+    return '\n'.join(new_lines)
+
+
 if __name__ == '__main__':
     existing = load_dataset('epfl-llm/guidelines', split='train')
 
@@ -28,7 +38,7 @@ if __name__ == '__main__':
                 'guideline_source': row['source'],
                 'accessed_from_hf': True,
                 'title': row['title'],
-                'text': row['clean_text'].strip(),
+                'text': add_double_hash_for_sections(row['clean_text'].strip()),
                 'num_tokens': num_tokens,
                 'url': row['url'],
                 'overview': row['overview']
@@ -50,7 +60,7 @@ if __name__ == '__main__':
                     'guideline_source': obj['source'], 
                     'accessed_from_hf': False,
                     'title': obj['title'],
-                    'text': obj['clean_text'].strip(),
+                    'text': add_double_hash_for_sections(obj['clean_text'].strip()),
                     'num_tokens': num_tokens,
                     'url': obj['url'],
                     'overview': obj['overview']

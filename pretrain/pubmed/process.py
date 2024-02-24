@@ -304,14 +304,14 @@ def format_article(record):
             # Keep abstract & main body (skip all text after figures)
             elif annot_type == 'T' and not at_figures:
                 text += part
-            
-            # Format section headers (# for sections, ## for subsections, capitalise first letter)
+
+            # Format section headers (## for sections, ### for subsections, capitalise first letter)
             elif annot_type == 'SEC':
                 part = part[0].upper() + part[1:].lower()
                 if is_main_section_header(part):
-                    text += '\n# ' + part + '\n'
-                else: 
                     text += '\n## ' + part + '\n'
+                else:
+                    text += '\n### ' + part + '\n'
 
             # Wrap entries in special tokens [bib] (only if KEEP_BIBLIOGRAPHY)
             elif annot_type == 'BIB' and KEEP_BIBLIOGRAPHY: 
@@ -375,6 +375,7 @@ def format_article(record):
     text = re.sub(r'\n+', '\n', text)
     text = re.sub(r'\n# ', '\n\n# ', text)
     text = re.sub(r'\n## ', '\n\n## ', text)
+    text = re.sub(r'\n### ', '\n\n### ', text)
     text = re.sub(r' +', ' ', text)
     text = re.sub(r'\[/fig_ref\] \.', '[/fig_ref].', text)
     text = re.sub(r'\[/bib_ref\] \.', '[/bib_ref].', text)
@@ -425,10 +426,10 @@ def process_s2orc(source_path, save_path, start=None, end=None):
                     skipped += 1
                     continue
 
-                # Prepend title if given
+                # Prepend "# {title}" if given
                 title = record.get('title')
                 if title:
-                    text = title + '\n\n' + text
+                    text = '# ' + title + '\n\n' + text
 
                 # Save article
                 record.update({'text': text})
@@ -490,7 +491,7 @@ def process_abstracts(source_path, save_path, start=None, end=None):
                 # Prepend title if given
                 title = record.get('title')
                 if title:
-                    text = title + '\n' + text
+                    text = '# ' + title + '\n' + text
 
                 # Cleaning up
                 text = remove_urls(text)

@@ -17,6 +17,8 @@ import gzip
 import shutil
 import argparse
 from tqdm import tqdm
+from p_tqdm import p_uimap
+
 
 def get_s2orc_credentials(path='keys.json'):
     """
@@ -63,7 +65,7 @@ def download_dataset(data_path, dataset):
         dataset_dir = os.path.join(data_path, dataset)
         if os.path.exists(dataset_dir):
             print(f"Found existing {dataset} directory at {dataset_dir}.")
-        else: 
+        else:
             print(f"Creating {dataset} directory at {dataset_dir}.")
             os.mkdir(dataset_dir)
 
@@ -164,57 +166,14 @@ def filter_pubmed(dataset_dir, dataset):
     pubmed_count = 0
     other_count = 0
     with open(dataset_path, 'r') as f_in, open(pubmed_path, 'w') as f_pubmed, open(other_path, 'w') as f_other:
-        for line in tqdm(f_in):
-            article = json.loads(line)
+        articles = list(p_uimap(json.loads, f_in))
+        for article in tqdm(articles):
+            # article = json.loads(line)
             pm_id, pmc_id = get_ids(dataset, article)
             if pmc_id is not None or pm_id is not None:
                 f_pubmed.write(json.dumps(article) + "\n")
                 pubmed_count += 1
-            else: 
-                f_other.write(json.dumps(article) + "\n")
-                other_count += 1
-    print(f"Finished filtering {dataset} dataset into PubMed and non-PubMed articles.")
-    print(f"Found {pubmed_count} PubMed articles and {other_count} non-PubMed articles.\n")
-
-def filter_pubmed_corpus(data_path, dataset='abstracts'):
-    """ 
-    Separate dataset into PubMed+PMC vs. non-PubMed articles using papers corpus IDs.
-    """
-    dataset_dir = os.path.join(data_path, dataset)
-    dataset_path = os.path.join(dataset_dir, f"{dataset}.jsonl")
-    if not os.path.exists(dataset_path):
-        raise ValueError(f'Could not find {dataset} dataset at {dataset_path}.')
-    pubmed_path = os.path.join(dataset_dir, f"{dataset}-PubMed.jsonl")
-    other_path = os.path.join(dataset_dir, f"{dataset}-nonPubMed.jsonl")
-    if os.path.exists(pubmed_path) or os.path.exists(other_path):
-        return
-    papers_pm_path = os.path.join(data_path, 'papers', 'papers-PubMed.jsonl')
-    if not os.path.exists(papers_pm_path):
-        raise ValueError(f'Could not find papers-PubMed dataset at {papers_pm_path}.')
-
-    # Get all corpus IDs from papers-PubMed data
-    print(f'\n4. Filtering {dataset} dataset at {dataset_path} papers-PubMed corpus IDs.\n')
-    corpus_ids = set()
-    with open(papers_pm_path, 'r') as f_in:
-        for line in f_in:
-            try: 
-                article = json.loads(line)
-                corpus_ids.add(article.get('corpusid'))
-            except:
-                pass
-    print(f'Found {len(corpus_ids)} corpus IDs in papers-PubMed dataset.\n')
-    
-    # Filter dataset into PubMed and non-PubMed articles using corpus IDs
-    pubmed_count = 0
-    other_count = 0
-    with open(dataset_path, 'r') as f_in, open(pubmed_path, 'w') as f_pubmed, open(other_path, 'w') as f_other:
-        for line in tqdm(f_in):
-            article = json.loads(line)
-            corpus_id = article.get('corpusid')
-            if corpus_id in corpus_ids:
-                f_pubmed.write(json.dumps(article) + "\n")
-                pubmed_count += 1
-            else: 
+            else:
                 f_other.write(json.dumps(article) + "\n")
                 other_count += 1
     print(f"Finished filtering {dataset} dataset into PubMed and non-PubMed articles.")
