@@ -22,22 +22,33 @@ class MultiMedQAConfigs:
     train_split: str = 'train'
     validation_split: str = 'validation'
     test_split: str = 'test'
+    cot_col: str = None
 
 
 ALL_CONFIGS = [
     MultiMedQAConfigs(
         name='pubmedqa',
         hf_args=('bigbio/pubmed_qa', 'pubmed_qa_labeled_fold0_source'),
-        instruction='Answer this multiple-choice question using the following PubMed abstract as evidence by writing the letter associated with the correct answer.',
+        instruction='Answer this Yes/No/Maybe question using the following PubMed abstract as evidence by writing the letter associated with the correct answer.',
         input_to_prompt=input_to_prompt_pubmedqa,
         input_to_target=input_to_target_pubmedqa,
+        cot_col='LONG_ANSWER'
+    ),
+    MultiMedQAConfigs(
+        name='pubmedqa_artificial',
+        hf_args=('bigbio/pubmed_qa', 'pubmed_qa_artificial_source'),
+        instruction='Answer this Yes/No question using the following PubMed abstract as evidence by writing the letter associated with the correct answer.',
+        input_to_prompt=input_to_prompt_pubmedqa,
+        input_to_target=input_to_target_pubmedqa_artificial,
+        cot_col='LONG_ANSWER'
     ),
     MultiMedQAConfigs(
         name='medmcqa',
         hf_args=('medmcqa', ),
-        instruction='Answer this multiple-choice question from the AIIMS & NEET PG entrance medical licensing exams by writing the letter associated with the correct answer.',
+        instruction='Answer this multiple-choice question on {} from the AIIMS & NEET PG entrance medical licensing exams by writing the letter associated with the correct answer.',
         input_to_prompt=input_to_prompt_medmcqa,
         input_to_target=input_to_target_medmcqa,
+        cot_col='exp'
     ),
     MultiMedQAConfigs(
         name='medqa',
@@ -60,19 +71,35 @@ if __name__ == '__main__':
         dataset = load_dataset(*config.hf_args)
 
         for split in ['train', 'validation', 'test']:
-            data_split = dataset[getattr(config, f'{split}_split')]
+            config_split_name = getattr(config, f'{split}_split')
+            if config_split_name not in dataset:
+                print(f'{config.name} has no {config_split_name} split. Make sure you have correct split names.')
+                print(f'Available options are --> ' + ', '.join(list(dataset.keys())))
+                continue
+
+            data_split = dataset[config_split_name]
             for idx, example in enumerate(data_split):
                 id = config.input_to_id(example, split, idx)
-                prompt = f'<<Instruction:>> {config.instruction}\n----\n{config.input_to_prompt(example)}'
+
+                if config.name == 'medmcqa':
+                    instruction = config.instruction.format(example['subject_name'])
+                else:
+                    instruction = config.instruction
+
+                prompt = f'<<Instruction:>> {instruction}\n----\n{config.input_to_prompt(example)}'
                 # Important Make sure prompt has a trailing space
                 prompt = prompt.strip() + ' '
                 completion = config.input_to_target(example)
+                explanation = '' if config.cot_col is None else example[config.cot_col]
+                if explanation is None:  # For MedMCQA sometimes they are none
+                    explanation = '' 
 
                 out_row = {
                     'id': id,
-                    'task': config.name,
+                    'source': config.name,
                     'prompt': prompt,
-                    'completion': completion
+                    'completion': completion,
+                    'explanation': explanation
                 }
 
                 outputs[split].append(out_row)
@@ -84,6 +111,5 @@ if __name__ == '__main__':
 
     out_dir = os.path.join(OUT_DIR, 'dataset_hf')
     print(f'Saving multimedqa training set to {out_dir}')
-    # outputs.save_to_disk(out_dir)
-
-    outputs.push_to_hub('medarc/sft_multimedqa')
+    outputs.save_to_disk(out_dir)
+    # outputs.push_to_hub('medarc/sft_multimedqa')

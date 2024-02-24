@@ -27,37 +27,34 @@ if __name__ == '__main__':
 
                 line = json.loads(line)
                 assert type(line) == dict
-                if 'id' not in line:
-                    assert line['metadata']['source'] == 'guidelines'
-                    num_removed_guidelines += 1
-                    # TODO This is fixed if we re-run pretrain#combine
-                else:
-                    if line['metadata']['source'] == 'wikidoc':
-                        print(line['text'])
-                        print(line['id'])
-                        print('\n\n\n')
-                    filtered_ids.add(line['id'])
+                filtered_ids.add(line['id'])
 
-    print(f'Num removed guidelines: {num_removed_guidelines}')
     dataset = load_dataset('medarc/clinical_pile_v1', split='train')
 
     all_cts = Counter(dataset['source'])
 
     print('Pre Filtering...')
     total = len(dataset)
-    for k, v in all_cts.items():
-        print(k + ' -> ' + str(round(v / total, 5)))
+    for x in sorted(all_cts.items(), key=lambda x: (-x[1], x[0])):
+        k, v = x
+        print(k + ' -> ' + str(v) + ' (' + str(round(v / total, 5)) + ')')
     print('\n\n\n')
-    filtered = dataset.filter(lambda row: row['id'] in filtered_ids)
 
-    filtered_cts = Counter(filtered['source'])
+    remaining = dataset.filter(lambda row: row['id'] not in filtered_ids)
+    remaining_cts = Counter(remaining['source'])
 
     print('Post Filtering...')
-    filt_n = len(filtered)
-    for k, v in filtered_cts.items():
-        print(k + ' -> ' + str(round(v / filt_n, 5)))
+    remaining_n = len(remaining)
+    for x in sorted(remaining_cts.items(), key=lambda x: (-x[1], x[0])):
+        k, v = x
+        print(k + ' -> ' + str(v) + ' (' + str(round(v / remaining_n, 5)) + ')')
     print('\n\n\n')
 
     print('Fraction Removed...')
-    for k, v in all_cts.items():
+
+    filtered = dataset.filter(lambda row: row['id'] in filtered_ids)
+    filtered_cts = Counter(filtered['source'])
+
+    for x in sorted(all_cts.items(), key=lambda x: (-x[1], x[0])):
+        k, v = x
         print(k + ' -> ' + str(round(filtered_cts[k] / v, 5)))

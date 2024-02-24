@@ -3,8 +3,8 @@ import os
 
 from datasets import Dataset, DatasetDict
 
-MEDNLI_DIR = '/weka/home-griffin/clinical_pile/mednli'
-OUT_DIR = '/weka/home-griffin/clinical_pile/mednli/dataset_hf'
+MEDNLI_DIR = '/weka/home-griffin/clinical_instructions/mednli'
+OUT_DIR = os.path.join(MEDNLI_DIR, 'dataset_hf')
 
 
 INSTRUCTION = 'Does the given medical "hypothesis" logically follow from the "premise"?'

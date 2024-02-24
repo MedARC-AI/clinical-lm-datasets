@@ -58,6 +58,17 @@ if __name__ == '__main__':
         in_dir = os.path.join(BASE_DIR, source.hf_path)
         print(f'Loading {source.name} from {in_dir}')
         dataset = load_from_disk(in_dir)
+        n = len(dataset)
+        dataset = dataset.filter(lambda row: len(row['id']) > 0)
+        new_n = len(dataset)
+        removed_n = n - new_n
+        if removed_n > 0:
+            print('\n\n')
+            print('*' * 100)
+            print(f'Removing {removed_n} examples with empty string ID. Fix this for next version.')
+            print('*' * 100)
+            print('\n\n')
+
         meta_cols = [x for x in dataset.features if x not in MANDATORY_COLS]
 
         assert all([type(x) == str and len(x) > 0 for x in dataset['id']])
@@ -96,18 +107,17 @@ if __name__ == '__main__':
     all_datasets = concatenate_datasets(all_datasets)
     assert len(all_datasets) == len(set(all_datasets['id']))
 
-    out_dir = os.path.join(OUT_DIR, 'dataset_hf')
+    if args.hub_name is None:
+        out_dir = os.path.join(OUT_DIR, 'dataset_hf')
 
-    print(f'Saving {len(all_datasets)} examples to {out_dir}')
-    all_datasets.save_to_disk(out_dir)
-    
+        print(f'Saving {len(all_datasets)} examples to {out_dir}')
+        all_datasets.save_to_disk(out_dir)
+    else:
+        print(f'Pushing PILE ({len(all_datasets)}) to HuggingFace Hub --> {args.hub_name}')
+        all_datasets.push_to_hub(args.hub_name)
     stats = pd.DataFrame(stats)
     out_fn =  os.path.join(OUT_DIR, 'sources.csv')
     print(f'Saving information on all {len(stats)} sources in Clinical PILE to {out_fn}')
     stats.to_csv(out_fn, index=False)
 
     print(stats[['source', 'examples', 'tokens']].sort_values(by='tokens', ascending=False).head(n=25))
-
-    if args.hub_name is not None:
-        print(f'Pushing PILE to HuggingFace Hub --> {args.hub_name}')
-        all_datasets.push_to_hub(args.hub_name)

@@ -11,11 +11,14 @@ pandas
 ftfy
 markdownify
 nltk
+gritlm
 webdriver-manager
 spacy
 scispacy
 langdetect
 p-tqdm
 pypdf2
+stanza
 transformers
 vllm
+h5py

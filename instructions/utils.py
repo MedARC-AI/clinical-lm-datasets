@@ -50,6 +50,12 @@ def input_to_target_pubmedqa(doc):
     return letters[choices.index(doc['final_decision'])]
 
 
+def input_to_target_pubmedqa_artificial(doc):
+    choices = ['yes', 'no']
+    letters = ['A', 'B']
+    return letters[choices.index(doc['final_decision'])]
+
+
 def input_to_prompt_medmcqa(doc):
     letters = ['A', 'B', 'C', 'D']
     question = doc['question']

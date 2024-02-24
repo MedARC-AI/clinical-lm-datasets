@@ -6,14 +6,10 @@ from glob import glob
 
 import argparse
 from datasets import Dataset, concatenate_datasets, load_dataset
-from datatrove.executor.base import PipelineExecutor
 from datatrove.executor.local import LocalPipelineExecutor
-from datatrove.pipeline.dedup import ESDatasetToSequence, ESMergeSequences, ESRangeRemover
-from datatrove.pipeline.extractors import Trafilatura
-from datatrove.pipeline.filters import GopherQualityFilter, LanguageFilter
-from datatrove.pipeline.readers import JsonlReader, WarcReader, HuggingFaceDatasetReader
+from datatrove.pipeline.dedup.exact_substrings import ESDatasetToSequence, ESMergeSequences, ESRangeRemover
+from datatrove.pipeline.readers import HuggingFaceDatasetReader
 from datatrove.pipeline.writers.jsonl import JsonlWriter
-from datatrove.utils.typeshelper import Languages
 from p_tqdm import p_uimap
 
 

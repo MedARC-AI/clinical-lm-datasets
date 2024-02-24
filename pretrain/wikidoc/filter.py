@@ -3,9 +3,10 @@ import requests
 import regex as re
 from pathlib import Path
 
+import argparse
 import ftfy
 from bs4 import BeautifulSoup
-from datasets import Dataset
+from datasets import Dataset, load_from_disk
 from tqdm import tqdm
 
 
@@ -34,6 +35,12 @@ def get_text_tags(tag):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser('Extract HTML from WikiDoc.')
+    # parser.add_argument('--do_not_filter_sources', default='wikidoc', type='str')  # "|" comma delimited
+    parser.add_argument('-remove_guideline_urls', default=False, action='store_true')  # From Meditron
+
+    args = parser.parse_args()
+
     ## Many pages with "There is currently no text in this page."
     script_dir = Path(__file__).resolve().parent
     filename = 'chapter_links.txt'
@@ -41,15 +48,41 @@ if __name__ == '__main__':
 
     with open(file_path, 'r') as file:
         chapter_links = [x.strip() for x in file.readlines() if len(x) > 0]
+
+    wikidoc_guideline_urls = set()
+    if args.remove_guideline_urls:
+        GUIDELINES_DIR = '/weka/home-griffin/clinical_pile/guidelines/dataset_hf'
+        print(f'Loading guidelines from {GUIDELINES_DIR}')
+        guidelines = load_from_disk(GUIDELINES_DIR)
+
+        pattern = re.compile('[^a-zA-Z]')
+
+        def remove_non_alpha(url):
+            return pattern.sub('', url.strip().lower()).strip()
+
+        wikidoc_guideline_urls = set()
+        for g in guidelines:
+            url = g['url']
+            if 'wikidoc' not in url:
+                continue
+            assert 'https://www.wikidoc.org/index.php/' in url
+            url = url.replace('https://www.wikidoc.org/index.php/', '')
+            url_clean = remove_non_alpha(url)
+            if len(url_clean) > 0:
+                wikidoc_guideline_urls.add(url_clean)
+
+        prev_n = len(chapter_links)
+        print(chapter_links[0])
+        print(remove_non_alpha(chapter_links[0]))
+        chapter_links = [p for p in chapter_links if remove_non_alpha(p.replace('/index.php/', '').strip()) not in wikidoc_guideline_urls]
+        new_n = len(chapter_links)
+        print(f'Removed {prev_n - new_n} chapters which are in Meditron HuggingFace dataset.')
     
     dataset = []
     seen = set()
     seen_titles = set()
     for path in tqdm(chapter_links):
         response = requests.get(BASE_URL + path)
-        # print('\n\n')
-        # print(BASE_URL + path)
-
         html_content = response.text
 
         if 'no text in this page' in html_content:
@@ -110,19 +143,16 @@ if __name__ == '__main__':
                 seen_titles.add(title)
 
             dataset.append({
-                'id': path,
+                'id': url,
                 'text': clean_output,
                 'num_tokens': num_tokens
             })
             print(f'Saving {num_tokens} tokens of content!')
-            # print('\n\n')
-            # print(clean_output)
-            # print('\n\n')
         else:
             print('Found content but too short or could not parse.')
 
     hf_dir = os.path.join(OUT_DIR, 'dataset_hf')
     dataset = Dataset.from_list(dataset)
-    # TODO put back
-    # print(f'Saving {len(dataset)} chapters to {hf_dir}')
-    # dataset.save_to_disk(hf_dir)
+    
+    print(f'Saving {len(dataset)} chapters to {hf_dir}')
+    dataset.save_to_disk(hf_dir)

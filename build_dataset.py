@@ -12,6 +12,7 @@ class CFG:
     TOKENIZER: str = "meta-llama/Llama2-7b-hf"
     DATASET_NAME: str = "CarperAI/pilev2-dev"
 
+
 def main(args):
     tokenizer = AutoTokenizer.from_pretrained(CFG.TOKENIZER)
     train_dataset = load_dataset(CFG.DATASET_NAME, split="train")
