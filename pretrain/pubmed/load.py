@@ -129,14 +129,14 @@ def combine_dataset(dataset_dir, dataset):
                     f_out.write(line)
     print(f'Finished aggregating {dataset_dir} files into {dataset_path}.\n')
 
-def get_ids(dataset, article): 
+def get_ids(dataset, article):
     '''
     Helper to extract PubMed and PMC IDs from a given article depending on dataset.
     '''
-    try: 
+    try:
         if dataset == 'abstracts': 
             ids = article.get('openaccessinfo').get('externalids')
-            if ids: 
+            if ids:
                 return None, ids.get('PubMedCentral')
         elif dataset == 's2orc':
             ids = article.get('externalids')
@@ -192,12 +192,15 @@ def join_metadata(papers_pm_path, dataset_pm_path):
     out_path = dataset_pm_path.split('.')[0] + '_metadata.jsonl'
     total = 0
     print(f'Loading papers metadata from {papers_pm_path}.')
+
+    # papers = list(p_uimap(json.loads, open(papers_pm_path, 'r')))
     papers = [json.loads(line) for line in tqdm(open(papers_pm_path, 'r'))]
     papers = {paper.get('corpusid'): paper for paper in papers}
-    
+
     print(f'Joining {dataset_pm_path} with metadata from {papers_pm_path}.')
     with open(dataset_pm_path, 'r') as f_in, open(out_path, 'w') as f_out: 
         count = 0
+        # records = list(p_uimap(json.loads, f_in))
         for line in tqdm(f_in):
             total += 1
             record = json.loads(line)
@@ -237,10 +240,11 @@ def data_pipeline(data_path, dataset):
     # 6. Adapt abtracts keys
     dataset_meta_path = os.path.join(dataset_dir, f'{dataset}-PubMed_metadata.jsonl')
     tmp_path = dataset_meta_path + '.tmp'
-    if dataset == 'abstracts': 
+    if dataset == 'abstracts':
         with open(dataset_meta_path, 'r') as f_in, open(tmp_path, 'w') as f_out:
-            for line in tqdm(f_in):
-                record = json.loads(line)
+            records = list(p_uimap(json.loads, f_in))
+            for record in tqdm(records):
+                # record = json.loads(line)
                 record.pop('openaccessinfo')
                 record['text'] = record.pop('abstract')
                 f_out.write(json.dumps(record) + '\n')

@@ -1,3 +1,4 @@
+autofaiss
 autoscraper
 beautifulsoup4
 datatrove[processing]
@@ -21,4 +22,5 @@ pypdf2
 stanza
 transformers
 vllm
+nltk
 h5py

@@ -402,7 +402,7 @@ def process_s2orc(source_path, save_path, start=None, end=None):
             if end and count > end:
                 break
             total += 1
-            try: 
+            try:
                 # Filter out invalid entries
                 record = json.loads(line)
                 content = record.get('content')
