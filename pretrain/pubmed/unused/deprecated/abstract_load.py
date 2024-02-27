@@ -6,7 +6,7 @@ Including: download, extraction, aggregation, filtering and metadata joining
 The resulting files are:
 - path/s2orc-PubMed_metadata.jsonl: 
     PubMed or PubMedCentral full-text articles (open-access subset)
-- path/abstracts-PubMed_metadata.jsonl: 
+- path/abstracts-PubMed_metadata.jsonl:
     PubMed or PubMedCentral abstracts (open-access subset)
 """
 
@@ -129,27 +129,17 @@ def combine_dataset(dataset_dir, dataset):
                     f_out.write(line)
     print(f'Finished aggregating {dataset_dir} files into {dataset_path}.\n')
 
-
-def get_ids(dataset, article):
+def get_ids(article):
     '''
     Helper to extract PubMed and PMC IDs from a given article depending on dataset.
     '''
     try:
-        if dataset == 'abstracts':
-            ids = article.get('openaccessinfo').get('externalids')
-            if ids:
-                return None, ids.get('PubMedCentral')
-        elif dataset == 's2orc':
-            ids = article.get('externalids')
-            if ids:
-                return ids.get('pubmed'), ids.get('pubmedcentral')
-        elif dataset == 'papers': 
-            ids = article.get('externalids')
-            if ids:
-                return ids.get('PubMed'), ids.get('PubMedCentral')
+        ids = article.get('openaccessinfo').get('externalids')
+        if ids:
+            return ids.get('PubMedCentral')
     except:
         pass
-    return None, None
+    return None
 
 
 def filter_pubmed(dataset_dir, dataset): 
@@ -160,30 +150,23 @@ def filter_pubmed(dataset_dir, dataset):
     if not os.path.exists(dataset_path):
         raise ValueError(f'Could not find {dataset} dataset at {dataset_path}.')
     pubmed_path = os.path.join(dataset_dir, f"{dataset}-PubMed.jsonl")
-    other_path = os.path.join(dataset_dir, f"{dataset}-nonPubMed.jsonl")
-    if os.path.exists(pubmed_path) or os.path.exists(other_path):
-        return
+    if os.path.exists(pubmed_path):
+        print(f'Removing existing {pubmed_path}')
+        os.remove(pubmed_path)
     print(f'\n4. Filtering {dataset} dataset at {dataset_path} into PubMed and non-PubMed articles.\n')
     pubmed_count = 0
     other_count = 0
+    with open(dataset_path, 'r') as f_in:
+        for line in tqdm(f_in):
+            article = json.loads(line)
+            pmc_id = get_ids(article)
+            if pmc_id is not None:
+                pubmed_count += 1
+                if pubmed_count % 10000 == 0:
+                    print(f"So Far: {pubmed_count} PubMed articles and {other_count} non-PubMed articles.\n")
+            else:
+                other_count += 1
 
-    def load_just_pubmed(line):
-        article = json.loads(line)
-        pm_id, pmc_id = get_ids(dataset, article)
-        if pmc_id is None and pm_id is None:
-            return None
-        return article
-
-    articles = list(p_uimap(load_just_pubmed, open(dataset_path, 'r')))
-    pubmed_articles = list(filter(None, articles))
-    n = len(articles)
-    pubmed_count = len(pubmed_articles)
-    other_count = n - pubmed_count
-
-    print(f'Saving {pubmed_count} documents to {pubmed_path}')
-    with open(pubmed_path, 'w') as f_pubmed:
-        for article in pubmed_articles:
-            f_pubmed.write(json.dumps(article) + "\n")
     print(f"Finished filtering {dataset} dataset into PubMed and non-PubMed articles.")
     print(f"Found {pubmed_count} PubMed articles and {other_count} non-PubMed articles.\n")
 
@@ -201,7 +184,6 @@ def join_metadata(papers_pm_path, dataset_pm_path):
     total = 0
     print(f'Loading papers metadata from {papers_pm_path}.')
 
-    # papers = list(p_uimap(json.loads, open(papers_pm_path, 'r')))
     papers = [json.loads(line) for line in tqdm(open(papers_pm_path, 'r'))]
     papers = {paper.get('corpusid'): paper for paper in papers}
 
@@ -218,6 +200,7 @@ def join_metadata(papers_pm_path, dataset_pm_path):
                 record.update(match)
                 f_out.write(json.dumps(record) + '\n')
                 count += 1
+
     print(f'Finished joining {dataset_pm_path} with metadata from {papers_pm_path}.\n')
     print(f'Joined {count} articles out of {total}.\n')
 
@@ -242,27 +225,25 @@ def data_pipeline(data_path, dataset):
     # 5. Join PubMed articles with metadata from papers dataset
     papers_pm_path = os.path.join(data_path, 'papers', 'papers-PubMed.jsonl')
     dataset_pm_path = os.path.join(dataset_dir, f'{dataset}-PubMed.jsonl')
-    if dataset in ['s2orc', 'abstracts']:
-        join_metadata(papers_pm_path, dataset_pm_path)
+    
+    join_metadata(papers_pm_path, dataset_pm_path)
 
     # 6. Adapt abtracts keys
     dataset_meta_path = os.path.join(dataset_dir, f'{dataset}-PubMed_metadata.jsonl')
     tmp_path = dataset_meta_path + '.tmp'
-    if dataset == 'abstracts':
-        with open(dataset_meta_path, 'r') as f_in, open(tmp_path, 'w') as f_out:
-            records = list(p_uimap(json.loads, f_in))
-            for record in tqdm(records):
-                # record = json.loads(line)
-                record.pop('openaccessinfo')
-                record['text'] = record.pop('abstract')
-                f_out.write(json.dumps(record) + '\n')
-        os.remove(dataset_meta_path)
-        os.rename(tmp_path, dataset_meta_path)
+    with open(dataset_meta_path, 'r') as f_in, open(tmp_path, 'w') as f_out:
+        records = list(p_uimap(json.loads, f_in))
+        for record in tqdm(records):
+            # record = json.loads(line)
+            record.pop('openaccessinfo')
+            record['text'] = record.pop('abstract')
+            f_out.write(json.dumps(record) + '\n')
+    os.remove(dataset_meta_path)
+    os.rename(tmp_path, dataset_meta_path)
 
 
-def main():
+if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-
     parser.add_argument(
         "--data_path",
         type=str,
@@ -273,33 +254,9 @@ def main():
         type=str,
         default='/weka/home-griffin/clinical_pile/credentials/s2_api_key.json',
         help="Path to json file containing Semantic Scholar API key.")
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default='s2orc',
-        help="Dataset to download from Semantic Scholar API. Available: [s2orc, abstracts, papers, all].")
+
     args = parser.parse_args()
 
-    # Load S2ORC API keys
-    if not os.path.exists(args.key_path):
-        print(f'Could not find Semantic Scholar API key file at {args.key_path}. Please enter your API key:')
-        API_KEY = input()
-        with open(args.key_path, 'w') as f:
-            json.dump({'api_key': API_KEY}, f)
-    else: 
-        get_s2orc_credentials(args.key_path) 
+    get_s2orc_credentials(args.key_path) 
 
-    # Create data directory if it doesn't exist
-    if not os.path.exists(args.data_path):
-        os.mkdir(args.data_path)
-    if args.dataset not in ['s2orc', 'abstracts', 'papers', 'all']:
-        raise ValueError(f"Invalid dataset {dataset}. Available: [s2orc, abstracts, papers, all].")
-    datasets = ['papers', 's2orc', 'abstracts'] if args.dataset == 'all' else [args.dataset]
-
-    for dataset in datasets:
-        print(f'\nData pipeline entered for {dataset} dataset.\n')
-        data_pipeline(args.data_path, dataset)
-
-
-if __name__ == "__main__":
-    main()
+    data_pipeline(args.data_path, 'abstracts')

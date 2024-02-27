@@ -7,21 +7,22 @@ from datasets import load_dataset
 
 
 EXCLUDED_SOURCES = {
+    'c4',
     'common-crawl',
     'reddit',
-    'c4'
+    'stack-dedup',
 }
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Sample fraction of Dolma')
 
-    parser.add_argument('--dolma_subset', default='v1_6-sample')
+    parser.add_argument('--dolma_subset', default='v1_6')
     parser.add_argument('--target_tokens', default=1e9, type=int)  # 1 Billion
 
     args = parser.parse_args()
 
-    dataset = load_dataset('allenai/dolma', 'v1_6-sample', split='train')
+    dataset = load_dataset('allenai/dolma', args.dolma_subset, split='train')
     
     # Exclude Web Data and reddit
     dataset = dataset.filter(lambda row: row['source'] not in EXCLUDED_SOURCES)

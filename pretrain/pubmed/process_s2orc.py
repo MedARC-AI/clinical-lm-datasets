@@ -4,37 +4,22 @@ Including: Filtering, formatting, cleaning.
 """
 
 import argparse
+from datasets import load_dataset
+import orjson  # For faster de-serialization (loads)
 import json
 import numpy as np
 import tqdm.auto as tqdm
-import json
 from itertools import groupby
 import re
+import string
 import os
 from langdetect import detect
-import jsonlines
 from p_tqdm import p_uimap
 
 from load import *
 
-KEEP_HEADER = False         # Keep article header (content before title/abstract/first section header)?
-KEEP_FIGURE_CONTENT = True  # Keep figure content and wrap in [fig] tokens?
-KEEP_TABLE_CONTENT = True   # Keep table content and wrap in [table] tokens? 
-KEEP_BIBLIOGRAPHY = False   # Keep bibligraphy entries and wrap in [bib] tokens?
-
-SPECIAL_TOKENS = [
-    '[bib_ref]', '[/bib_ref]',  # In-text author references
-    '[fig_ref]', '[/fig_ref]',  # In-text figure references
-    '[formula]', '[/formula]'   # In-text formulae
-    ]
-
-
-if KEEP_FIGURE_CONTENT:
-    SPECIAL_TOKENS += ['[fig]', '[/fig]']
-if KEEP_TABLE_CONTENT:
-    SPECIAL_TOKENS += ['[table]', '[/table]']
-if KEEP_BIBLIOGRAPHY: 
-    SPECIAL_TOKENS += ['[bib]', '[/bib]']
+KEEP_HEADER = False  # Keep article header (content before title/abstract/first section header)?
+KEEP_BIBLIOGRAPHY = False  # Keep bibligraphy entries and wrap in [bib] tokens?
 
 
 MAIN_SECTION_HEADERS = [
@@ -103,58 +88,6 @@ def is_main_section_header(section):
     return False
 
 
-def format_fig(record, fig_id, max_length=12):
-    '''
-    Format figure reference into `Fig [ID]: [summarized figure caption].`
-    Truncates figure caption to max_length words if needed. 
-    '''
-    article = record['content']['text']
-    annotations = record['content']['annotations']
-    try:
-        # Find figure entry
-        for fig in json.loads(annotations['figure']):
-            if fig['attributes']['id'] == fig_id:
-                fig_start = int(fig['start'])
-                fig_end = int(fig['end'])
-                break
-
-
-        # Find figure caption
-        fig_caption_start, fig_caption_end = None, None
-        for fig_caption in json.loads(annotations['figurecaption']):
-            if fig_caption['start'] >= fig_start and fig_caption['end'] <= fig_end:
-                fig_caption_start = int(fig_caption['start'])
-                fig_caption_end = int(fig_caption['end'])
-                break
-
-        # If no caption found, skip
-        if not fig_caption_start:
-            return None, None
-
-        # Format prefix 
-        prefix = article[fig_start:fig_caption_start].split('\n')[1]
-        fig_name = re.sub(r'[:()]', '', prefix.replace(' .', ' '))
-        fig_name = fig_name.replace('Fig.', 'Figure')
-        fig_name = fig_name.replace('Tab.', 'Table')
-        fig_name = fig_name.replace(' Figure', ', Figure')
-        fig_name = fig_name.strip()
-
-        # Format caption
-        caption = article[fig_caption_start:fig_caption_end].replace(prefix, '').strip()
-        if max_length:
-            caption = summarize_caption(caption, max_length)
-        if caption.split()[0].isdigit():
-            fig_name += ' '+caption.split()[0]
-            caption = ' '.join(caption.split()[1:])
-        if fig_name != '':
-            fig_name += ': '
-        while caption.startswith('.') or caption.startswith(',') or caption.startswith(')'):
-            caption = caption[1:].strip()
-        return fig_name, caption
-    except:
-        return None
-
-
 def parse_article(record):
     '''
     Creates an array of annotation types for each character in the article.
@@ -182,7 +115,7 @@ def parse_article(record):
         annotations = record['content']['annotations'][annot_type]
         if not annotations:
             continue
-        annotations = json.loads(annotations)
+        annotations = orjson.loads(annotations)
 
         # Remove title duplicates
         if annot_type == 'title':
@@ -214,27 +147,26 @@ def parse_article(record):
                     reflect_array[start:end] = token
             except:
                 pass
-    
+
     # Remove article header (before title/abstract/first section header)
-    if not KEEP_HEADER: 
-        try:
-            start = None
-            abstract = record['content']['annotations']['abstract']
-            if abstract:
-                abstract_start = int(json.loads(abstract)[0]['start'])
-                if abstract_start:
-                    start = abstract_start
-            section_headers = json.loads(record['content']['annotations']['sectionheader'])
-            if section_headers:
-                intro_start = min([int(s['start']) for s in section_headers])
-                if not start or intro_start < start:
-                    start = intro_start
-            if start:
-                idx_T = np.where(reflect_array == 'T')[0]
-                idx_before_abstract = idx_T[idx_T < start]
-                reflect_array[idx_before_abstract] = 'P'
-        except:
-            pass
+    try:
+        start = None
+        abstract = record['content']['annotations']['abstract']
+        if abstract:
+            abstract_start = int(orjson(abstract)[0]['start'])
+            if abstract_start:
+                start = abstract_start
+        section_headers = orjson.loads(record['content']['annotations']['sectionheader'])
+        if section_headers:
+            intro_start = min([int(s['start']) for s in section_headers])
+            if not start or intro_start < start:
+                start = intro_start
+        if start:
+            idx_T = np.where(reflect_array == 'T')[0]
+            idx_before_abstract = idx_T[idx_T < start]
+            reflect_array[idx_before_abstract] = 'P'
+    except:
+        pass
     return reflect_array
 
 
@@ -278,24 +210,13 @@ def format_article(record):
             elif annot_type == 'SEC':
                 part = part[0].upper() + part[1:].lower()
                 if is_main_section_header(part):
-                    text += '\n## ' + part + '\n'
+                    text += '\n## ' + part.strip(string.punctuation).strip().upper() + '\n'
                 else:
-                    text += '\n### ' + part + '\n'
-
-            # Wrap entries in special tokens [bib] (only if KEEP_BIBLIOGRAPHY)
-            elif annot_type == 'BIB' and KEEP_BIBLIOGRAPHY: 
-                text += ' [bib] ' + part + ' [/bib]\n'
+                    text += '\n### ' + part.strip(string.punctuation).strip().upper() + '\n'
 
             # Wrap in-text figures/table refs in [fig_ref] tokens + summarize caption
             elif 'fig_' in annot_type or 'tab_' in annot_type:
-                if annot_type in formatted_figs:
-                    fig_str = formatted_figs[annot_type]
-                else:
-                    fig_name, caption = format_fig(record, annot_type)
-                    fig_str = fig_name + caption
-                    formatted_figs[annot_type] = fig_str
-                if fig_str:
-                    text += ' [fig_ref] ' + fig_str + ' [/fig_ref] '
+                text += ' '
 
             # Wrap in-text author/bib references in [bib_ref] tokens + summarize caption
             elif 'b' in annot_type:
@@ -305,29 +226,10 @@ def format_article(record):
                     start += len(subarray)
                     continue
 
-                # Format identified references
-                # I removed the in-line citations
-                # if annot_type in formatted_bibs:
-                #     bib_str = formatted_bibs[annot_type]
-                # else:
-                #     bib_str = format_bib(record, annot_type)
-                #     formatted_bibs[annot_type] = bib_str
-                # if bib_str:
-                #     text += ' [bib_ref] ' + bib_str + ' [/bib_ref] '
 
             # Keep figure/table content wrapped in [fig]/[table] tokens
             elif ('FIG_' in annot_type) or ('TAB_' in annot_type):
                 at_figures = True
-                fig_id = annot_type.split('_')[0].lower()+'_'+annot_type.split('_')[1]
-                fig_name, caption = format_fig(record, fig_id, max_length=None)
-                if fig_name and caption:
-                    fig_str = fig_name + caption
-                    # Check the figure hasn't already been added
-                    added = any([re.sub(r'[:,()]', '', fig.strip()) in fig_name.lower() for fig in added_figures])
-                    if 'continued' not in fig_str.lower() and not added:
-                        added_figures += [fig_name.lower()]
-                        tags = ['[fig]','[/fig]'] if 'FIG_' in annot_type else ['[table]','[/table]']
-                        text += '\n' + tags[0] + ' ' + fig_str + ' ' + tags[1] + '\n'
 
             # Wrap formulae in [formula] tokens
             elif annot_type == 'FML':
@@ -347,8 +249,6 @@ def format_article(record):
     text = re.sub(r'\n## ', '\n\n## ', text)
     text = re.sub(r'\n### ', '\n\n### ', text)
     text = re.sub(r' +', ' ', text)
-    text = re.sub(r'\[/fig_ref\] \.', '[/fig_ref].', text)
-    text = re.sub(r'\[/bib_ref\] \.', '[/bib_ref].', text)
 
     return text
 
@@ -388,7 +288,7 @@ def process_s2orc(source_path, save_path):
 
 def process_line(line):
     # Filter out invalid entries
-    record = json.loads(line)
+    record = orjson.loads(line)
     content = record.get('content')
     if not content:
         skipped += 1
@@ -414,11 +314,28 @@ def process_line(line):
 
     text = text.strip()
 
-    # Save article
-    record.update({'text': text})
-    record.pop('content')
-    return record
+    pmid = str(record['externalids'].get('PubMed', ''))
+    pmcid = str(record['externalids'].get('PubMedCentral', ''))
+    doi = str(record['externalids'].get('DOI', ''))
+    id = []
+    if pmid is not None:
+        id.append('pmid-' + pmid)
+    if pmcid is not None:
+        id.append('pmcid-' + pmcid)
+    id = '_'.join(id)
 
+    obj = {
+        'id': id,
+        'pmid': pmid,
+        'pmcid': pmcid,
+        'doi': doi,
+        's2_corpusid': str(record['corpusid']),
+        'text': text,
+        'isopenaccess': record['isopenaccess'],
+        'journal': str(record['journal']['name']),
+    }
+
+    return obj
 
 
 if __name__ == '__main__':
@@ -428,8 +345,26 @@ if __name__ == '__main__':
         help="Path to jsonl file to process.")
     parser.add_argument(
         "--save_path", type=str,
-        default='/weka/home-griffin/clinical_pile/pubmed/s2orc/s2orc-PubMed_processed_v2.jsonl',
+        default='/weka/home-griffin/clinical_pile/pubmed/s2orc/s2orc-PubMed_processed',
         help="Path to save processed jsonl file.")
     args = parser.parse_args()
 
-    process_s2orc(args.source_path, args.save_path)
+    json_out = args.save_path + '.jsonl'
+    hf_out = args.save_path + '_hf'
+    cids_out = args.save_path + '_corpusids.txt'
+    process_s2orc(args.source_path, json_out)
+
+    hf_dataset = load_dataset('json', data_files=json_out, split='train')
+
+    hf_dataset = hf_dataset.map(
+        lambda row: {'num_tokens': len(re.split(r'\W+', row['text']))},
+        num_proc=64
+    )
+
+    print(f'Saving {len(hf_dataset)} examples to {hf_out}')
+    hf_dataset.save_to_disk(hf_out)
+
+    # Used when getting PeS2o data to remove PubMed articles in S2
+    corpus_ids = list(sorted(list(set(hf_dataset['s2_corpusid']))))
+    with open(cids_out, 'w') as fd:
+        fd.write('\n'.join(corpus_ids))

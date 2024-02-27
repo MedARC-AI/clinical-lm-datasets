@@ -1,8 +1,9 @@
 autofaiss
 autoscraper
 beautifulsoup4
+boto3
 datatrove[processing]
-datasets
+datasets[s3]
 tqdm
 selenium
 jupyter
@@ -11,8 +12,10 @@ autopep8
 pandas
 ftfy
 markdownify
+networkx
 nltk
 gritlm
+orjson
 webdriver-manager
 spacy
 scispacy

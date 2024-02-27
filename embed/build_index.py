@@ -3,22 +3,25 @@
 import os
 import regex as re
 
-import argparse 
+import argparse
 import h5py
 import numpy as np
 import pandas as pd
 from autofaiss import build_index
 from datasets import load_from_disk
-from glob import glob
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('combine all embedding files into one very large numpy array')
 
     parser.add_argument('--embed_dir', default='/weka/home-griffin/clinical_pile/v1')
-    parser.add_argument('--out_fn', default='/weka/home-griffin/clinical_pile/v1/knn.index')
+    parser.add_argument('--out_dir', default='/weka/home-griffin/clinical_pile/v1/embed_index')
 
     args = parser.parse_args()
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    args.index_fn = os.path.join(args.out_dir, 'knn.index')
+    args.id_fn = os.path.join(args.out_dir, 'ids.txt')
 
     subdirs = os.listdir(args.embed_dir)
 
@@ -42,12 +45,18 @@ if __name__ == '__main__':
         h5f = h5py.File(embed_fn,'r')
         embeddings.append(np.array(h5f.get('array')))
         ids += load_from_disk(data_dir)['id']
-        break
 
     print('Concatenating embeddings...')
     embeddings = np.concatenate(embeddings)
 
     build_index(
-        embeddings=embeddings, file_format='npy', index_path=args.out_fn, save_on_disk=True, use_gpu=False,
-        min_nearest_neighbors_to_retrieve=10
+        embeddings=embeddings, file_format='npy', index_path=args.index_fn, save_on_disk=True, use_gpu=False,
+        min_nearest_neighbors_to_retrieve=10,
+        max_index_memory_usage='100gb',
+        current_memory_available='250gb',
+        max_index_query_time_ms=20,
+        make_direct_map=True  # Allows us to recreate the indices
     )
+
+    with open(args.id_fn, 'w') as fd:
+        fd.write('\n'.join(ids))

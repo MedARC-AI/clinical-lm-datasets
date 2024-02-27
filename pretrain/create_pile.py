@@ -4,7 +4,7 @@ import regex as re
 import argparse
 from dataclasses import dataclass
 
-from datasets import concatenate_datasets, load_from_disk
+from datasets import concatenate_datasets, load_from_disk, load_dataset
 import pandas as pd
 
 
@@ -29,8 +29,9 @@ SOURCES = [
     Source(name='mimic', hf_path='mimic/dataset_hf'),
     Source(name='ncbi_bookshelf', hf_path='ncbi_bookshelf/dataset_hf'),
     Source(name='nih_grant_abstracts', hf_path='nih_grant_abstracts/dataset_hf'),
-    # Source(name='umls', hf_path='umls/definitions_dataset_hf'),
+    Source(name='gutenberg_books', hf_path='/weka/home-griffin/clinical_pile/books/dataset_hf'),
     Source(name='wikidoc', hf_path='wikidoc/dataset_hf'),
+    Source(name='pubmed', hf_path='/weka/home-griffin/clinical_pile/pubmed/s2orc/s2orc-PubMed_processed.jsonl')
 ]
 
 
@@ -57,7 +58,11 @@ if __name__ == '__main__':
     for source in SOURCES:
         in_dir = os.path.join(BASE_DIR, source.hf_path)
         print(f'Loading {source.name} from {in_dir}')
-        dataset = load_from_disk(in_dir)
+
+        if in_dir.endswith('json') or in_dir.endswith('jsonl'):
+            hf_dataset = load_dataset('json', data_files=in_dir)['train']
+        else:
+            dataset = load_from_disk(in_dir)
         n = len(dataset)
         dataset = dataset.filter(lambda row: len(row['id']) > 0)
         new_n = len(dataset)
@@ -79,7 +84,10 @@ if __name__ == '__main__':
         if 'num_tokens' not in dataset.features:
             print('Adding token counts which were missing...')
             dataset = dataset.map(
-                lambda row: {'num_tokens': get_token_ct(row['text'])},
+                lambda row: {
+                    'num_tokens': get_token_ct(row['text']),
+                    'uuid': row['source'] + '-' + row['id'],  # In case of overlapping ids across sources
+                },
                 num_proc=16
             )
 
@@ -105,6 +113,7 @@ if __name__ == '__main__':
         all_datasets.append(dataset)
     
     all_datasets = concatenate_datasets(all_datasets)
+    print('Checking to make sure that there are no overlapping IDs across datasets.')
     assert len(all_datasets) == len(set(all_datasets['id']))
 
     if args.hub_name is None:

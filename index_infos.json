@@ -1,1 +1,0 @@
-{"index_key": "HNSW32", "index_param": "efSearch=380", "index_path": "/weka/home-griffin/clinical_pile/v1/knn.index", "size in bytes": 4987449202, "avg_search_speed_ms": 9.927253592953397, "99p_search_speed_ms": 22.376932769548148, "reconstruction error %": 0.0, "nb vectors": 299436, "vectors dimension": 4096, "compression ratio": 0.9836610309800605}
