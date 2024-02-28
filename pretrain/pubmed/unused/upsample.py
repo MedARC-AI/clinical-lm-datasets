@@ -12,7 +12,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from pubmed.approved_journals import APPROVED_JOURNALS
+from pretrain.pubmed.unused.approved_journals import APPROVED_JOURNALS
 
 
 FILTER_CONSTANT = -1000000

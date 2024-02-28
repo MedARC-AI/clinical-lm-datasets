@@ -36,6 +36,7 @@ def process(row):
     text = re.sub('\t+', ' ', text)
     text = '# ' + text
     text = text.strip()
+    text = '\n'.join([x.strip() for x in text.split('\n')])
     return text
 
 

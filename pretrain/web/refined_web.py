@@ -36,12 +36,11 @@ def process(row):
     text = re.sub(' +', ' ', text)
     text = re.sub('\t+', ' ', text)
     text = text.strip()
+    text = '\n'.join([x.strip() for x in text.split('\n')])
     return text
 
 
 if __name__ == '__main__':
-
-
     s3 = boto3.resource('s3')
     key = f'falcon-refinedweb/'
 

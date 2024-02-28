@@ -20,18 +20,21 @@ class Source:
 
 
 SOURCES = [
-    Source(name='chemsum', hf_path='chemistry/dataset_hf'),
+    Source(name='pubmed', hf_path='/weka/home-griffin/clinical_pile/pubmed/s2orc/s2orc-PubMed_processed.jsonl'),
+    Source(name='pes2o', hf_path='pes2o/dataset_sample_hf'),
+    Source(name='refined_web', hf_path='refined_web/dataset_hf'),
+    Source(name='mimic', hf_path='mimic/dataset_hf'),
+    Source(name='nih_grant_abstracts', hf_path='nih_grant_abstracts/dataset_hf'),
     Source(name='guidelines', hf_path='guidelines/dataset_hf'),
+    Source(name='wikipedia', hf_path='wikipedia/dataset_hf'),
+    Source(name='gutenberg_books', hf_path='/weka/home-griffin/clinical_pile/books/dataset_hf'),
+    Source(name='chemsum', hf_path='chemistry/dataset_hf'),
     Source(name='medline_plus_genes', hf_path='medline/genes_hf'),
     Source(name='medline_plus_genetic_conditions', hf_path='medline/genetic_conditions_hf'),
     Source(name='medline_plus_medical_tests', hf_path='medline/medical_tests_hf'),
     Source(name='medline_plus_topic_summaries', hf_path='medline/topic_summaries_hf'),
-    Source(name='mimic', hf_path='mimic/dataset_hf'),
-    Source(name='ncbi_bookshelf', hf_path='ncbi_bookshelf/dataset_hf'),
-    Source(name='nih_grant_abstracts', hf_path='nih_grant_abstracts/dataset_hf'),
-    Source(name='gutenberg_books', hf_path='/weka/home-griffin/clinical_pile/books/dataset_hf'),
     Source(name='wikidoc', hf_path='wikidoc/dataset_hf'),
-    Source(name='pubmed', hf_path='/weka/home-griffin/clinical_pile/pubmed/s2orc/s2orc-PubMed_processed.jsonl')
+    Source(name='ncbi_bookshelf', hf_path='ncbi_bookshelf/dataset_hf'),
 ]
 
 
