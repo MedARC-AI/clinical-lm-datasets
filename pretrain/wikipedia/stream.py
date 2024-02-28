@@ -12,13 +12,12 @@ from datasets import concatenate_datasets, load_dataset
 MIN_DOC_TOKENS = 50
 NUM_SHARDS = 2
 
-
-BOOKS_DIR = '/weka/home-griffin/clinical_pile/books'
+WIKI_DIR = '/weka/home-griffin/clinical_pile/wikipedia'
 BUCKET_NAME = 'pile-everything-west' # replace with your bucket name
 
 
 def download(s3, key):
-    out_fn = os.path.join(BOOKS_DIR, key.split('/')[-1])
+    out_fn = os.path.join(WIKI_DIR, key.split('/')[-1])
     try:
         print(f'Downloading {key} from {BUCKET_NAME} and saving to {out_fn}')
         s3.Bucket(BUCKET_NAME).download_file(key, out_fn)
@@ -51,7 +50,7 @@ if __name__ == '__main__':
         else:
             suffix = str(shard)
         
-        key = f'dolma/v1/gutenberg-books/books-00{suffix}.json.gz'
+        key = f'dolma/v1/wiki-en-simple/en_simple_wiki-00{suffix}.json.gz'
 
         # Use boto3 to download the dataset
         shard_local_fn = download(s3, key)
@@ -80,7 +79,7 @@ if __name__ == '__main__':
 
     datasets = concatenate_datasets(datasets)
 
-    out_dir = os.path.join(BOOKS_DIR, 'dataset_hf')
+    out_dir = os.path.join(WIKI_DIR, 'dataset_hf')
     total_toks = sum(datasets['num_tokens'])
-    print(f'Saving {len(datasets)} books with {total_toks} total tokens to {out_dir}')
+    print(f'Saving {len(datasets)} Wikipedia articles with {total_toks} total tokens to {out_dir}')
     dataset.save_to_disk(out_dir)

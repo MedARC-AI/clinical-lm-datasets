@@ -14,10 +14,10 @@ print(f'Loading all S2 Corpus IDs from our PubMed corpus to avoid re-using for r
 PUBMED_CORPUS_IDS = set([
     str(x.strip()) for x in open(PUBMED_CORPUS_ID_FN, 'r').readlines() if len(x.strip()) > 0
 ])
+
 MIN_DOC_TOKENS = 50
 NUM_SHARDS = 42
 TARGET_ARTICLES = 1000000
-
 
 PES2O_DIR = '/weka/home-griffin/clinical_pile/pes2o'
 BUCKET_NAME = 'pile-everything-west' # replace with your bucket name
@@ -72,17 +72,18 @@ if __name__ == '__main__':
         shard_local_fn = download(s3, key, PES2O_DIR)
 
         # Use HF to load it
-        dataset = load_dataset('json', data_files=shard_local_fn, split='train')
+        try:
+            dataset = load_dataset('json', data_files=shard_local_fn, split='train', encoding_errors='skip')
+        except Exception as e:
+            print(e)
+            os.remove(shard_local_fn)
+            print(f'Shard:{shard} cannot be loaded properly. Skipping.')
+            continue
         # Filter out corpus ids in our pubmed dataset
-        dataset = dataset.filter(lambda row: row['id'] not in PUBMED_CORPUS_IDS)
-
-        # Computing Number of Tokens / Document
-        dataset = dataset.map(
-            lambda row: {'num_tokens': len(re.split(r'\W+', row['text']))},
+        dataset = dataset.filter(
+            lambda row: row['id'] not in PUBMED_CORPUS_IDS,
             num_proc=64
         )
-
-        dataset = dataset.filter(lambda row: row['num_tokens'] >= MIN_DOC_TOKENS)
 
         idxs = np.arange(len(dataset))
         np.random.shuffle(idxs)
@@ -92,6 +93,15 @@ if __name__ == '__main__':
         remove_cols = [
             col for col in list(sample.features) if col not in {'text', 'id'}
         ]
+
+
+        # Computing Number of Tokens / Document
+        sample = sample.map(
+            lambda row: {'num_tokens': len(re.split(r'\W+', row['text']))},
+            num_proc=64
+        )
+
+        sample = sample.filter(lambda row: row['num_tokens'] >= MIN_DOC_TOKENS, num_proc=64)
 
         sample = sample.map(
             lambda row: {'shard': shard, 'text': process(row), 's2_corpusid': row['id'], 'id': row['id']},
