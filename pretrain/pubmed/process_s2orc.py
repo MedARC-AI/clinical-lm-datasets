@@ -16,6 +16,7 @@ import os
 from langdetect import detect
 from p_tqdm import p_uimap
 
+from duplicate_ids import DUPLICATE_INTERNAL_IDS
 from load import *
 
 KEEP_HEADER = False  # Keep article header (content before title/abstract/first section header)?
@@ -226,7 +227,6 @@ def format_article(record):
                     start += len(subarray)
                     continue
 
-
             # Keep figure/table content wrapped in [fig]/[table] tokens
             elif ('FIG_' in annot_type) or ('TAB_' in annot_type):
                 at_figures = True
@@ -358,6 +358,12 @@ if __name__ == '__main__':
 
     hf_dataset = hf_dataset.map(
         lambda row: {'num_tokens': len(re.split(r'\W+', row['text']))},
+        num_proc=64
+    )
+
+    print(f'Removing articles whose PMID/PMC IDs appear more than once: {len(DUPLICATE_INTERNAL_IDS)} such articles...')
+    hf_dataset = hf_dataset.filter(
+        lambda row: row['id'] not in DUPLICATE_INTERNAL_IDS,
         num_proc=64
     )
 

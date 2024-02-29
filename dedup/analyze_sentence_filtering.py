@@ -73,5 +73,3 @@ if __name__ == '__main__':
     for source in total_toks_by_source:
         print(source)
         print(f'\t - Removed {round(total_removed_toks_by_source[source] / total_toks_by_source[source], 3)} Tokens.')
-
-                

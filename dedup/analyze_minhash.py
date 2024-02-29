@@ -4,7 +4,7 @@ import os
 from collections import Counter, defaultdict
 from glob import glob
 
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from tqdm import tqdm
 
 
@@ -29,7 +29,7 @@ if __name__ == '__main__':
                 assert type(line) == dict
                 filtered_ids.add(line['id'])
 
-    dataset = load_dataset('medarc/clinical_pile_v1', split='train')
+    dataset = load_from_disk('/weka/home-griffin/clinical_pile/v1/dataset_hf')
 
     all_cts = Counter(dataset['source'])
 

@@ -33,6 +33,7 @@ if KEEP_TABLE_CONTENT:
 if KEEP_BIBLIOGRAPHY: 
     SPECIAL_TOKENS += ['[bib]', '[/bib]']
 
+
 MAIN_SECTION_HEADERS = [
     'Abstract', 'Introduction', 'Background', 'Related',
     'Method', 'Material', 'Result', 'Analysis', 'Discussion',
@@ -42,7 +43,8 @@ MAIN_SECTION_HEADERS = [
     'Tables', 'Figures', 'Appendix'
 ]
 
-def detect_lang(text, sample_size=2000): 
+
+def detect_lang(text, sample_size=2000):
     '''
     Helper: Detect language of a given text.
     '''
@@ -276,11 +278,10 @@ def parse_article(record):
     return reflect_array
 
 
-def process_abstracts(source_path, save_path, start=None, end=None):
+def process_abstracts(abstracts, save_path, start=None, end=None):
     ''' 
     Processing for PubMed abstracts.
     '''
-    print(f'\nPre-processing text in {source_path}.\n')
     if os.path.exists(save_path):
         print(f'File {save_path} already exists. Do you want to overwrite it? [y/n]')
         if input().lower() == 'y':
@@ -290,25 +291,15 @@ def process_abstracts(source_path, save_path, start=None, end=None):
     non_english = 0
     duplicates = 0
     skipped = 0
-    corpus_ids = set()
-    with open(source_path, 'r') as f_in, open(save_path, 'a') as f_out:
-        for line in tqdm(f_in):
+    with open(save_path, 'a') as f_out:
+        for record in tqdm(abstracts):
             if start and total <= start:
                 continue
             if end and total > end:
                 break
             total += 1
 
-            try: 
-                record = json.loads(line)
-
-                # Remove duplicates
-                corpus_id = record.get('corpusid')
-                if corpus_id and corpus_id in corpus_ids:
-                    duplicates += 1
-                    continue
-                corpus_ids.add(corpus_id)
-
+            try:
                 text = record.get('text')
                 if not text:
                     skipped += 1
@@ -332,49 +323,59 @@ def process_abstracts(source_path, save_path, start=None, end=None):
                 record['text'] = text
                 f_out.write(json.dumps(record) + '\n')
                 count += 1
-
             except: 
                 skipped += 1
                 continue
 
     print(f'Finished processing {count} out of {total} articles\
           \nRemoved {non_english} non-English articles.\
-          \nRemoved {duplicates} duplicates.\
-          \nSkipped {skipped} articles leading to errors. ')
+          \nSkipped {skipped} articles leading to errors.')
 
 
-def deduplicate(abstracts_path, s2orc_path):
+def deduplicate(abstracts, s2orc_path):
     '''
     Remove all abstracts for which we already have a full-text version.
     '''
     # Get all corpus IDs in s2orc_path
     corpus_ids = set()
     print(f'Collecting corpus IDs from {s2orc_path}')
-    # corpus_ids = set(list(p_uimap(lambda line: json.loads(line)['corpusid'], open(s2orc_path, 'r'))))
     for line in tqdm(open(s2orc_path, 'r')):
         corpus_ids.add(int(re.search(r'corpusid": (\d+)', line).group(1)))
     print(f'Loaded {len(corpus_ids)} uniqued corpus ids from {s2orc_path}')
-    # with open(s2orc_path, 'r') as f_in:
-    #     for line in tqdm(f_in):
-    #         record = json.loads(line)
-    #         corpus_ids.add(record['corpusid'])
 
     # Remove all abstracts with corpus IDs in s2orc_path
-    print(f'\nRemoving all abstracts with full-text versions in {s2orc_path} from {abstracts_path}.\n')
+    print(f'\nRemoving all abstracts with full-text versions in {s2orc_path}.\n')
     removed = 0
-    dedup_path = abstracts_path.replace('.jsonl', '_dedup.jsonl')
-    with open(abstracts_path, 'r') as f_in, open(dedup_path, 'a') as f_out:
+    deduped = []
+    for record in tqdm(abstracts):
+        corpus_id = record.get('corpusid')
+        assert type(corpus_id) == int
+        if corpus_id and corpus_id in corpus_ids:
+            removed += 1
+            continue
+        deduped.append(record)
+    print(f'Removed {removed} abstracts with full-text versions in {s2orc_path}.')
+
+    return record
+
+
+def self_deduplicate(abstracts_path):
+    deduped = []
+    removed = 0
+    seen_cids = set()
+    with open(abstracts_path, 'r') as f_in:
         for line in tqdm(f_in):
             record = json.loads(line)
             corpus_id = record.get('corpusid')
             assert type(corpus_id) == int
-            if corpus_id and corpus_id in corpus_ids:
+            if corpus_id in seen_cids:
                 removed += 1
                 continue
-            f_out.write(line)
-    print(f'Removed {removed} abstracts with full-text versions in {s2orc_path} from {abstracts_path}.')
 
-    return dedup_path
+            seen_cids.add(corpus_id)
+            deduped.append(record)
+    print(f'Removed {removed} with the exact same S2 Corpus ID')
+    return deduped
 
 
 if __name__ == '__main__':
@@ -405,5 +406,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    dedup_path = deduplicate(args.source_path, args.s2orc_path)
-    process_abstracts(dedup_path, args.processed_path)
+    filtered_abstracts = self_deduplicate(args.source_path)
+    filtered_abstracts = deduplicate(filtered_abstracts, args.s2orc_path)
+    process_abstracts(filtered_abstracts, args.processed_path)

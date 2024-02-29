@@ -34,6 +34,11 @@ def get_text_tags(tag):
     return outputs
 
 
+def remove_non_alpha_numeric(url):
+    pattern = re.compile('[^a-zA-Z0-9]')
+    return pattern.sub('', url.strip().lower()).strip()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Extract HTML from WikiDoc.')
     # parser.add_argument('--do_not_filter_sources', default='wikidoc', type='str')  # "|" comma delimited
@@ -55,11 +60,6 @@ if __name__ == '__main__':
         print(f'Loading guidelines from {GUIDELINES_DIR}')
         guidelines = load_from_disk(GUIDELINES_DIR)
 
-        pattern = re.compile('[^a-zA-Z]')
-
-        def remove_non_alpha(url):
-            return pattern.sub('', url.strip().lower()).strip()
-
         wikidoc_guideline_urls = set()
         for g in guidelines:
             url = g['url']
@@ -80,7 +80,6 @@ if __name__ == '__main__':
     
     dataset = []
     seen = set()
-    seen_titles = set()
     for path in tqdm(chapter_links):
         response = requests.get(BASE_URL + path)
         html_content = response.text
@@ -101,7 +100,8 @@ if __name__ == '__main__':
         try:
             title = soup.find('span', class_='mw-page-title-main').text.strip()
         except:
-            title = ''
+            print('No title.')
+            continue
 
         body = soup.find(id='mw-content-text')
 
@@ -119,9 +119,7 @@ if __name__ == '__main__':
             elif child.name == 'p':
                 sections.append(t)
 
-        outputs = []
-        if len(title) > 0:
-            outputs.append(f'# {title}')
+        outputs= [f'# {title}']
 
         has_section = False
         for i in range(len(sections)):
@@ -138,12 +136,9 @@ if __name__ == '__main__':
             clean_output = clean('\n\n'.join(outputs))
             num_tokens = len(re.split(r'\W+', clean_output))
 
-            if len(title) > 0:
-                assert title not in seen_titles
-                seen_titles.add(title)
-
             dataset.append({
-                'id': url,
+                'id': str(title),
+                'title': str(title),
                 'text': clean_output,
                 'num_tokens': num_tokens
             })

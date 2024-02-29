@@ -1,11 +1,12 @@
 import gzip
 import json
+import multiprocess
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 from glob import glob
 
 import argparse
-from datasets import Dataset, concatenate_datasets, load_dataset
+from datasets import load_dataset, load_from_disk
 from datatrove.pipeline.dedup import MinhashDedupSignature
 from datatrove.pipeline.dedup.minhash import (
     MinhashConfig,
@@ -20,7 +21,6 @@ from datatrove.pipeline.writers.jsonl import JsonlWriter
 from p_tqdm import p_uimap
 
 
-HF_HUB_DIR = 'medarc/clinical_pile_v1'
 MINHASH_BASE_PATH = '/weka/home-griffin/clinical_pile/v1/dedup/minhash'
 os.makedirs(MINHASH_BASE_PATH, exist_ok=True)
 SIG_DIR = os.path.join(MINHASH_BASE_PATH, 'signatures')
@@ -29,11 +29,12 @@ CLUSTER_DIR = os.path.join(MINHASH_BASE_PATH, 'clusters')
 REMOVED_IDS_DIR = os.path.join(MINHASH_BASE_PATH, 'removed_ids')
 REMOVED_DIR = os.path.join(MINHASH_BASE_PATH, 'removed')
 OUT_DIR = os.path.join(MINHASH_BASE_PATH, 'filtered_output')
-TOTAL_TASKS = 64
+TOTAL_TASKS = 1000
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Min-Hash LSH De-Duplication.')
+    parser.add_argument('--pile_path', default='/weka/home-griffin/clinical_pile/v1/dataset_hf')
     parser.add_argument('--keep_all_source_list', default='wikidoc', type=str)  # "|" comma delimited
     parser.add_argument('--mode', default='all', choices=['all', 'dedup', 'push_to_hub'])
 
@@ -42,10 +43,10 @@ if __name__ == '__main__':
     keep_all_source_set = set(args.keep_all_source_list.split('|'))
 
     if args.mode in {'all', 'dedup'}:
-
         loader = HuggingFaceDatasetReader(
-            dataset=HF_HUB_DIR,
-            dataset_options={'split': 'train'},
+            dataset=args.pile_path,
+            local=True,
+            # dataset_options={'split': 'train'},
             progress=True,
             text_key='text',
             id_key='id',
@@ -60,9 +61,9 @@ if __name__ == '__main__':
             pipeline=[loader, minhash_sig],
             logging_dir=os.path.join(SIG_DIR, 'logs'),
             tasks=TOTAL_TASKS,
-            workers=32
+            workers=multiprocess.cpu_count(),
         )
-        
+
         minhash_buckets = MinhashDedupBuckets(
             input_folder=SIG_DIR,
             output_folder=BUCKET_DIR,
@@ -73,7 +74,7 @@ if __name__ == '__main__':
             pipeline=[minhash_buckets],
             logging_dir=os.path.join(BUCKET_DIR, 'logs'),
             tasks=minhash_config.num_buckets,
-            workers=32,
+            workers=multiprocess.cpu_count()
         )
 
         minhash_cluster = MinhashDedupCluster(
@@ -86,7 +87,7 @@ if __name__ == '__main__':
             pipeline=[minhash_cluster],
             logging_dir=os.path.join(CLUSTER_DIR, 'logs'),
             tasks=1,  # What does this mean?
-            workers=32,
+            workers=multiprocess.cpu_count(),
         )
 
         minhash_filter = MinhashDedupFilter(
@@ -97,11 +98,12 @@ if __name__ == '__main__':
         token_counter = TokensCounter()
         out_writer = JsonlWriter(output_folder=OUT_DIR)
 
+        # Compute before and after token counts and log
         stage4 = LocalPipelineExecutor(
-            pipeline=[loader, token_counter, minhash_filter, out_writer],
+            pipeline=[loader, token_counter, minhash_filter, token_counter, out_writer],
             logging_dir=os.path.join(OUT_DIR, 'logs'),
             tasks=TOTAL_TASKS,
-            workers=32
+            workers=multiprocess.cpu_count(),
         )
 
         stage1.run()
@@ -111,28 +113,34 @@ if __name__ == '__main__':
 
     if args.mode in {'all', 'push_to_hub'}:
         # Save HF HUB
-        unfiltered_dataset = load_dataset(HF_HUB_DIR, split='train')
-
+        print(f'Loading PILE from {args.pile_path}')
+        # unfiltered_dataset = load_dataset(args.pile_path, split='train')
+        unfiltered_dataset = load_from_disk(args.pile_path)
         assert len(unfiltered_dataset) == len(set(unfiltered_dataset['id']))
-
         id_counts = Counter(unfiltered_dataset['id'])
+    
+        keep_ids = set(load_dataset('json', data_files=os.path.join(OUT_DIR, '*.gz'), split='train')['id'])
 
-        keep_ids = set()
+        # for fn in glob(os.path.join(OUT_DIR, '*.gz')):
+        #     print(f'Extracting Remaining Documents from {fn}')
+        #     with gzip.open(fn, 'r') as fd:
+        #         lines = [l.strip() for l in fd.readlines() if len(l.strip()) > 0]
+        #         lines = list(p_uimap(json.loads, lines))
+        #         for line in lines:
+        #             keep_ids.add(line['id'])
 
-        for fn in glob(os.path.join(OUT_DIR, '*.gz')):
-            print(f'Extracting Remaining Documents from {fn}')
-            with gzip.open(fn, 'r') as fd:
-                lines = [l.strip() for l in fd.readlines() if len(l.strip()) > 0]
-                lines = list(p_uimap(json.loads, lines))
-                for line in lines:
-                    keep_ids.add(line['id'])
-
-        def_keep_ids = set(unfiltered_dataset.filter(lambda row: row['source'] in keep_all_source_set)['id'])
-        combined_keep_ids = def_keep_ids.union(keep_ids)
+        # def_keep_ids = set(unfiltered_dataset.filter(
+        #     lambda row: row['source'] in keep_all_source_set)['id'],
+        # )
+        # combined_keep_ids = def_keep_ids.union(keep_ids)
 
         n = len(unfiltered_dataset)
-        filtered_dataset = unfiltered_dataset.filter(lambda row: row['id'] in combined_keep_ids)
+        # Either it's been saved by min-hash deduping or it's one of our "always save all" keep_all_source_set category
+        filtered_dataset = unfiltered_dataset.filter(
+            lambda row: row['id'] in keep_ids or row['source'] in keep_all_source_set
+        )
         print(f'Keeping {n}/{len(filtered_dataset)} documents')
 
-        hf_out_name = HF_HUB_DIR + '_minhash_deduped'
-        filtered_dataset.push_to_hub(hf_out_name)
+        hf_out_name = args.pile_path + '_minhash_deduped'
+        print(f'Saving {hf_out_name} filtered examples to {hf_out_name}')
+        filtered_dataset.save_to_disk(hf_out_name)

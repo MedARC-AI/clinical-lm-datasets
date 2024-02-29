@@ -13,7 +13,6 @@ from datatrove.pipeline.writers.jsonl import JsonlWriter
 from p_tqdm import p_uimap
 
 
-HF_PATH = 'medarc/clinical_pile_v1_minhash_dedup'
 SUBSTRING_BASE_PATH = '/weka/home-griffin/clinical_pile/v1/dedup/substring'
 os.makedirs(SUBSTRING_BASE_PATH, exist_ok=True)
 MERGE_DIR = os.path.join(SUBSTRING_BASE_PATH, 'merge')
@@ -23,7 +22,7 @@ OUT_DIR = os.path.join(SUBSTRING_BASE_PATH, 'filtered')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Min-Hash DeDup.')
-    # parser.add_argument('--do_not_filter_sources', default='wikidoc', type='str')  # "|" comma delimited
+    parser.add_argument('--pile_path', default='medarc/clinical_pile_v1_minhash_dedup', type='str')  # "|" comma delimited
     parser.add_argument('--stage', default=1, type=int, choices=[1, 2])
 
     args = parser.parse_args()
@@ -31,7 +30,7 @@ if __name__ == '__main__':
     include_all_sources = set(args.do_not_filter.split('|'))
 
     loader = HuggingFaceDatasetReader(
-        dataset=HF_PATH,
+        dataset=args.pile_path,
         dataset_options={'split': 'train'},
         progress=True,
         text_key='text',
@@ -71,9 +70,8 @@ if __name__ == '__main__':
             workers=4
         )
 
-        # Load JSONL
-        filtered_dataset = []
-        num_removed = defaultdict(int)
+        filtered_dataset = load_dataset('json', data_files=os.path.join(OUT_DIR, '*.gz'), split='train')
+
         for fn in glob(os.path.join(OUT_DIR, '*.gz')):
             print(f'Extracting Remaining Documents from {fn}')
             with gzip.open(fn, 'r') as fd:
@@ -81,13 +79,9 @@ if __name__ == '__main__':
                 lines = p_uimap(json.loads, lines)
                 for line in lines:
                     if line['source'] in include_all_sources:
-                        num_removed[line['source']] += 1
                         continue
                     else:
                         filtered_dataset.append(line)
-
-        unfiltered_dataset = load_dataset(HF_PATH)
-        filtered_dataset = Dataset.from_list(filtered_dataset)
 
         filtered_sources = set(filtered_dataset['source'])
         to_add = filtered_dataset.filter(lambda row: row['source'] in include_all_sources)
@@ -98,5 +92,5 @@ if __name__ == '__main__':
         print(Counter(to_add['source']).most_common())
 
         final_dataset = concatenate_datasets([filtered_dataset, to_add])
-        hf_out_name = HF_PATH + '_substring_dedup'
+        hf_out_name = args.pile_path + '_substring_dedup'
         final_dataset.save_to_hub(hf_out_name)

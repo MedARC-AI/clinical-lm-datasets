@@ -4,7 +4,7 @@ import regex as re
 import argparse
 import pandas as pd
 import torch
-from datasets import load_from_disk, load_dataset
+from datasets import load_from_disk
 from openai import AzureOpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -73,17 +73,12 @@ def get_logits(model, tokenizer, prompt):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Running LLM-based quality filter on paragraphs for different datasets.')
-    
+
     parser.add_argument('--model', default='mixtral', choices=list(MODELS.keys()))
 
     args = parser.parse_args()
 
-    data = load_from_disk('/weka/home-griffin/clinical_pile/v1/sample_hf')
-
-    good_paragraph = "Allergy is a disorder of the immune system that is often called atopy. Allergic reactions occur to environmental substances known as allergens; these reactions are acquired, predictable and rapid. Strictly, allergy is one of four forms of hypersensitivity and is called type I (or immediate) hypersensitivity. It is characterized by excessive activation of certain white blood cells called mast cells and basophils by a type of antibody, known as IgE, resulting in an extreme inflammatory response. Common allergic reactions include eczema, hives, hay fever, asthma, food allergies, and reactions to the venom of stinging insects such as wasps and bees."
-    hpi = "Patient is a 48 year-old well-nourished Hispanic male with a 2-month history of Rheumatoid Arthritis and strong family history of autoimmune diseases presenting after an episode of lightheadedness and muscle weakness."
-    bad_paragraph = "References Kay AB (2000). Overview of 'allergy and allergic diseases: with a view to the future. Br. Med. Bull. 56 (4): 843–64. PMID 11359624. Template:WikiDoc Sources"
-    other_bad = "'Open Arms' is a song by American singer-songwriter SZA (pictured) from her second studio album, SOS (2022), featuring American rapper Travis Scott. It is one of the album's guitar-backed acoustic ballads, exploring a style of music that departs from SZA's usual R&B-leaning sound."
+    data = load_from_disk('/weka/home-griffin/clinical_pile/v1/dataset_hf_50k_sample')
 
     if args.model == 'mixtral':
         model = AutoModelForCausalLM.from_pretrained(

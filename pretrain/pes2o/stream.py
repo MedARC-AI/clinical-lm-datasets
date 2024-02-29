@@ -7,7 +7,7 @@ import numpy as np
 import boto3
 import botocore
 import shutil
-from datasets import concatenate_datasets, load_dataset
+from datasets import concatenate_datasets, load_dataset, load_from_disk
 
 
 PUBMED_CORPUS_ID_FN = '/weka/home-griffin/clinical_pile/pubmed/s2orc/s2orc-PubMed_processed_corpusids.txt'
@@ -67,7 +67,8 @@ if __name__ == '__main__':
         shard_local_hf = os.path.join(PES2O_DIR, f'dataset_sample_hf_{shard}')
 
         if os.path.exists(shard_local_hf):
-            shard_datasets.append(load_dataset(shard_local_hf))
+            print(f'{shard_local_hf} already exists. Loading it from disk...')
+            shard_datasets.append(load_from_disk(shard_local_hf))
             shard_hf_paths.append(shard_local_hf)
         else:
             if shard < 10:
@@ -88,11 +89,17 @@ if __name__ == '__main__':
                 os.remove(shard_local_fn)
                 print(f'Shard:{shard} cannot be loaded properly. Skipping.')
                 continue
+
+            prev_n = len(dataset)
             # Filter out corpus ids in our pubmed dataset
             dataset = dataset.filter(
                 lambda row: row['id'] not in PUBMED_CORPUS_IDS,
                 num_proc=64
             )
+
+            non_pubmed_n = len(dataset)
+
+            print(f'Excluded {prev_n - non_pubmed_n} articles which are in our PubMed corpus...')
 
             idxs = np.arange(len(dataset))
             np.random.shuffle(idxs)

@@ -15,6 +15,14 @@ NUM_SHARDS = 2
 
 BOOKS_DIR = '/weka/home-griffin/clinical_pile/books'
 BUCKET_NAME = 'pile-everything-west' # replace with your bucket name
+DUP_IDS = {
+    'e927dbe32bf2ccfa7a141fcf4c3ce145d7f73918',
+    '61c83aeb7f8c23e65b207749db290b66a0ca393a',
+    '8ea47781d1f36e5773e5f8b78576723052ca8dcc',
+    '566f1eab849eb48788103eacccce342e80e74c23',
+    'e44b38eca89b8f1bc4183e6b10da01f73aa67ebd',
+    'fc25a4d62e71d68be396cc6c17c720a87b078b6e'
+}
 
 
 def download(s3, key):
