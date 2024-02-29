@@ -68,7 +68,7 @@ if __name__ == '__main__':
             dataset = load_dataset('json', data_files=in_dir)['train']
         else:
             dataset = load_from_disk(in_dir)
-        
+
         if source.name == 'refined_web':
             # Not JSON serializable
             dataset = dataset.remove_columns(['timestamp', 'dump', 'segment'])
