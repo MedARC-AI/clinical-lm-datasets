@@ -18,7 +18,8 @@ def should_keep(keep_prob):
 
 def main(args):
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    raw_dataset = load_from_disk(args.dataset)
+    # Don't need meta for final tokenized dataset. Just "text" and "source".
+    raw_dataset = load_from_disk(args.dataset).remove_columns('meta')
 
     reweighted_dataset, data_mixture = sample_dataset(raw_dataset, reweighting_config=args.reweighting_config, target_num_tokens=args.target_num_tokens)
 
@@ -54,8 +55,8 @@ def main(args):
 
         # Add in attention mask == all ones
         # Add in labels == input_ids
-        result['labels'] = deepcopy(result['input_ids'])
-        result['attention_mask'] = [[1 for _ in range(len(arr))] for arr in result['input_ids']]
+        # result['labels'] = deepcopy(result['input_ids'])
+        # result['attention_mask'] = [[1 for _ in range(len(arr))] for arr in result['input_ids']]
 
         return result
 
@@ -68,7 +69,7 @@ def main(args):
     print(f'Uploading {len(train_tokenized_dataset)} packed tokenized examples from {len(tokenized_dataset)} documents to {args.out_dir}')
     train_tokenized_dataset.push_to_hub(args.out_dir, private=True)
 
-    args.out_fn = args.out_dir + '_mixture.csv'
+    args.out_fn = args.tokenized_dir + '_mixture.csv'
 
     print(f'Saving information about re-weighted data mixture to {args.out_fn}')
     data_mixture.to_csv(args.out_fn, index=False)
@@ -92,6 +93,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.out_dir is None:
-        args.out_dir = f'medarc/clinical_pile_v1_{args.reweighting_config}'
+        args.out_dir = os.path.join(args.tokenized_dir, f'dataset_hf_{args.reweighting_config}')
         print(f'Did\'nt set --out_dir, so will be pushing dataset to default --> {args.out_dir}')
     main(args)

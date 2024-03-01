@@ -58,16 +58,18 @@ def sample_dataset(dataset, reweighting_config, target_num_tokens):
         toks_by_src[source] += row['num_tokens']
         docs_by_src[source] += 1
 
+    print('Converting to Pandas DataFrame to record mixtures with groupby...')
+    source_stats = dataset.remove_columns(['id', 'uuid', 'meta', 'text']).to_pandas().groupby('source')
     stats = []
-    for source in sources:
+    for source, df in source_stats:
         stats.append({
             'source': source,
-            'tokens': toks_by_src[source],
-            'documents': docs_by_src[source],
+            'tokens': df['num_tokens'].sum(),
+            'documents': len(df),
         })
 
-    print('Done sampling. Here\'s the final mixture...')
-    stats = pd.DataFrame(stats)    
+    print('Done sampling and recording stats. Here\'s the final mixture...')
+    stats = pd.DataFrame(stats)
     stats = stats.sort_values(by='tokens', ascending=False)
     print(stats.head(len(stats)))
     return dataset, stats
