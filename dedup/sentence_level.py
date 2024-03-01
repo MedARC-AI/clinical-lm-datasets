@@ -15,23 +15,32 @@ from datatrove.pipeline.writers.jsonl import JsonlWriter
 from p_tqdm import p_uimap
 
 
-
 SENT_DEDUP_DIR = '/weka/home-griffin/clinical_pile/v1/dedup/sentence'
 os.makedirs(SENT_DEDUP_DIR, exist_ok=True)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Sentence Level Exact Match Dedup.')
-    parser.add_argument('--pile_path', default='medarc/clinical_pile_v2_minhash_deduped')
+    parser.add_argument('--pile_path', default='/weka/home-griffin/clinical_pile/v1/dataset_hf_minhash')
+    # Books are too long and will break the hashing signature on sentencel level
+    # Code won't make sense if you filter at document level
+    parser.add_argument('--excluded_sources', default='gutenberg_books|code')
 
     args = parser.parse_args()
 
+    excluded_sources = set(args.excluded_sources.split('|'))
+    print(f'Excluding ', excluded_sources)
+    def filter_func(row, to_remove=excluded_sources):
+        return row['source'] not in to_remove
+
     loader = HuggingFaceDatasetReader(
         dataset=args.pile_path,
-        dataset_options={'split': 'train'},
+        # dataset_options={'split': 'train'},
         progress=True,
+        filter_func=filter_func,
+        local=True,
         text_key='text',
-        id_key='id',
+        id_key='uuid',
     )
 
     step1 = LocalPipelineExecutor(
@@ -64,6 +73,6 @@ if __name__ == '__main__':
     print(step2.run())
     print(step3.run())
 
-    # TODO 
+    # TODO
     # Get output from here --> os.path.join(SENT_DEDUP_DIR, 'filtered_output') into a HuggingFace dataset
     # Remove temporary gz files

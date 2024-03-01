@@ -12,8 +12,6 @@ REMOVED_DIR = '/weka/home-griffin/clinical_pile/v1/dedup/minhash/removed'
 
 
 if __name__ == '__main__':
-    removed_ids = set()
-
     filtered_ids = set()
     num_removed_guidelines = 0
     for fn in glob(os.path.join(REMOVED_DIR, '*.gz')):

@@ -1,21 +1,34 @@
-import multiprocessing
+import multiprocess
 import argparse
+import numpy as np
+import os
+np.random.seed(1992)
+from copy import deepcopy
 from itertools import chain
-from datasets import load_dataset
+from datasets import load_from_disk
 from transformers import AutoTokenizer
+
+
+from sample_utils import sample_dataset
+
+
+def should_keep(keep_prob):
+    return np.random.random() < keep_prob
 
 
 def main(args):
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    train_dataset = load_dataset(args.dataset, split='train')
+    raw_dataset = load_from_disk(args.dataset)
 
-    pre_tok_columns = list(train_dataset.features)
+    reweighted_dataset, data_mixture = sample_dataset(raw_dataset, reweighting_config=args.reweighting_config, target_num_tokens=args.target_num_tokens)
+
+    pre_tok_columns = list(reweighted_dataset.features)
     print('Removing all pre-tokenization columns -> ' + ', '.join(pre_tok_columns))
 
     def tokenize_function(example):
         return {'input_ids': tokenizer([t + tokenizer.eos_token for t in example['text']])['input_ids']}
 
-    tokenized_dataset = train_dataset.map(
+    tokenized_dataset = reweighted_dataset.map(
         tokenize_function,
         batched=True,
         num_proc=args.num_proc,
@@ -38,28 +51,47 @@ def main(args):
             k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
             for k, t in concatenated_examples.items()
         }
+
+        # Add in attention mask == all ones
+        # Add in labels == input_ids
+        result['labels'] = deepcopy(result['input_ids'])
+        result['attention_mask'] = [[1 for _ in range(len(arr))] for arr in result['input_ids']]
+
         return result
 
     train_tokenized_dataset = tokenized_dataset.map(
         group_texts,
         batched=True,
-        batch_size=int(1e-6),
         num_proc=args.num_proc
     )
 
-    out_dir = args.dataset + '_tokenized'
-    print(f'Uploading {len(train_tokenized_dataset)} packed tokenized examples from {len(tokenized_dataset)} documents to {out_dir}')
-    train_tokenized_dataset.push_to_hub(out_dir, private=True)
+    print(f'Uploading {len(train_tokenized_dataset)} packed tokenized examples from {len(tokenized_dataset)} documents to {args.out_dir}')
+    train_tokenized_dataset.push_to_hub(args.out_dir, private=True)
+
+    args.out_fn = args.out_dir + '_mixture.csv'
+
+    print(f'Saving information about re-weighted data mixture to {args.out_fn}')
+    data_mixture.to_csv(args.out_fn, index=False)
+
+    print('Cleaning up cache files...')
+    train_tokenized_dataset.cleanup_cache_files()
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Process and push dataset to Hugging Face Hub")
+    parser = argparse.ArgumentParser(description="Re-weight and tokeniz dataset")
     parser.add_argument('--seed', type=int, default=1992, help='Random seed')
-    parser.add_argument('--num_proc', default=multiprocessing.cpu_count(), type=int)
+    parser.add_argument('--num_proc', default=multiprocess.cpu_count(), type=int)
     parser.add_argument('--max_seq_length', type=int, default=8192, help='Sequence length for processing')
-    parser.add_argument('--tokenizer', type=str, default='Qwen/Qwen1.5-72B', help='Tokenizer model to use')
-    parser.add_argument('--dataset', type=str, default='medarc/clinical_pile_v1_minhash_deduped', help='Name of the dataset to process')
-    
+    parser.add_argument('--tokenizer', type=str, default='Qwen/Qwen1.5-0.5B', help='Tokenizer model to use')
+    parser.add_argument('--dataset', type=str, default='/weka/home-griffin/clinical_pile/v1/dataset_hf', help='Name of the dataset to process')
+    parser.add_argument('--target_num_tokens', type=int, required=True)
+    parser.add_argument('--reweighting_config', type=str, default='all')
+    parser.add_argument('--tokenized_dir', default='/weka/home-griffin/clinical_pile/v1/tokenized')
+    parser.add_argument('--out_dir', default=None)
+
     args = parser.parse_args()
-    
+
+    if args.out_dir is None:
+        args.out_dir = f'medarc/clinical_pile_v1_{args.reweighting_config}'
+        print(f'Did\'nt set --out_dir, so will be pushing dataset to default --> {args.out_dir}')
     main(args)

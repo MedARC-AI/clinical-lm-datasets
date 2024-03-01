@@ -3,9 +3,12 @@ import regex as re
 
 import argparse
 import pandas as pd
+import numpy as np
+np.random.seed(1992)
 import torch
 from datasets import load_from_disk
 from openai import AzureOpenAI
+from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
@@ -14,14 +17,14 @@ PROMPT_TEMPLATE = ("""
 {}
 >>>
 
-The previous paragraph demarcated within <<< and >>> comes from a Discharge Summary.
+The previous paragraph demarcated within <<< and >>> comes from {}.
 
 Your job is to assess its educational value to a medical student or resident.
 
 A paragraph with high educational value:
 1) Is clearly formatted and non-redundant.
-2) Is dense with medical concepts.
-3) Contains specific, non-trivial information about these concepts.
+2) Is information dense with medical concepts.
+3) Contains specific, non-trivial information about these medical concepts.
 4) If about a patient, is necessary to understand the patient's condition or care plan.
 5) Can be any length.
 
@@ -31,12 +34,12 @@ DO NOT provide an explanation.
 """)
 
 
-ANSWER_PREFIX = 'The Answer is'
+ANSWER_PREFIX = 'Answer (1-5): '
 MIXTRAL_TEMPERATURE = 0.1
 
-Y_IDX = 627
-N_IDX = 418
-
+LIKERT_IDS = [
+    28740, 28750, 28770, 28781, 28782
+]
 
 MODELS = {
     'mixtral': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
@@ -44,7 +47,25 @@ MODELS = {
 }
 
 
-def gpt_yes_prob(prompt, model='gpt-4', temperature=0, max_tokens=2048):
+SOURCE_DESCRIPTIONS = {
+    'pubmed': 'a PubMed Journal Article',
+    'mimic': 'a Clinical Note',
+    'wikidoc': 'a Wikidoc Textbook Chapter',
+    'refined_web': 'a Web Page',
+    'pes2o': 'an Academic Article',
+    'nih_grant_abstracts': 'a Abstract of a Grant submitted to the National Institutes of Health (NIH)',
+    'guidelines': 'a Clinical Guideline',
+    'gutenberg_books': 'a Book',
+    'chemsum': 'an Academic Article on Chemistry',
+    'ncbi_bookshelf': 'a Chapter from StatPearls textbook for medical students',
+    'medline_plus_genes': 'high quality information from MedLine Plus on a Gene',
+    'medline_plus_genetic_conditions': 'high quality information from MedLine Plus on a Genetic Condition',
+    'medline_plus_medical_tests': 'high quality information from MedLine Plus on a Medical Test',
+    'medline_plus_topic_summaries': 'high quality information from MedLine Plus on a Disease',
+}
+
+
+def gpt_score(prompt, model='gpt-4', temperature=0, max_tokens=2048):
     messages = [
         {'role': 'system', 'content': 'You are a professor at a top medical school and identify highly useful reading material for your students.'},
         {'role': 'user', 'content': prompt}
@@ -53,12 +74,12 @@ def gpt_yes_prob(prompt, model='gpt-4', temperature=0, max_tokens=2048):
     completion = client.with_options(max_retries=5).chat.completions.create(
         model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
     )
-    raw = completion.choices[0].message.content
-    assert raw.lower() in {'y', 'n'}
-    return 1 if raw.lower() == 'y' else 0
+    likert = int(completion.choices[0].message.content)
+    assert likert in list(range(1, 6))
+    return likert
 
 
-def get_logits(model, tokenizer, prompt):
+def mixtral_likert(model, tokenizer, prompt):
     messages = [
         {'role': 'user', 'content': prompt},
     ]
@@ -66,19 +87,30 @@ def get_logits(model, tokenizer, prompt):
     chat_text = tokenizer.apply_chat_template(messages, tokenize=False) + '\n' + ANSWER_PREFIX
     inputs = tokenizer(chat_text, return_tensors='pt')['input_ids'].to('cuda')
     logits = model(inputs).logits[:, -1, :][0]
-    ans_probs = torch.softmax(MIXTRAL_TEMPERATURE * logits[[Y_IDX, N_IDX]], dim=0)
-    y_prob = ans_probs[0]
-    return y_prob
+    ans_probs = torch.softmax(logits[LIKERT_IDS], dim=0).detach().cpu().numpy()
+    expectation = sum([p * x for p, x in zip(ans_probs, range(1, 6))])
+
+    return expectation
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Running LLM-based quality filter on paragraphs for different datasets.')
 
     parser.add_argument('--model', default='mixtral', choices=list(MODELS.keys()))
+    parser.add_argument('--paras_per_doc', default=1)
+    parser.add_argument('--excluded_sources', default='gutenberg_books|code')
 
     args = parser.parse_args()
 
     data = load_from_disk('/weka/home-griffin/clinical_pile/v1/dataset_hf_50k_sample')
+    N = len(data)
+
+    print('Removing ' + args.excluded_sources)
+    excluded_sources = set(args.excluded_sources.split('|'))
+    data = data.filter(lambda row: row['source'] not in excluded_sources)
+    filt_N = len(data)
+
+    print(f'Left with {filt_N} / {N} examples...')
 
     if args.model == 'mixtral':
         model = AutoModelForCausalLM.from_pretrained(
@@ -87,7 +119,8 @@ if __name__ == '__main__':
             attn_implementation='flash_attention_2',
             device_map='auto',
         ).eval()
-        tokenizer = AutoTokenizer.from_pretrained(args.model)
+        tokenizer = AutoTokenizer.from_pretrained(MODELS[args.model])
+        assert tokenizer.decode(LIKERT_IDS) == '12345'
     else:
         assert args.model == 'gpt-4'
         client = AzureOpenAI(
@@ -97,15 +130,32 @@ if __name__ == '__main__':
             azure_deployment=os.environ.get('OPENAI_AZURE_DEPLOYMENT', None)
         )
 
-    for row in data:
+    for row in tqdm(data):
         paras = re.split('\n\n', row['text'])
-        for para in paras:
-            print(para)
-            print('\n')
-            if args.model == 'mixtral':
-                y_prob = get_logits(model, tokenizer, PROMPT_TEMPLATE.format(para))
-            else:
-                y_prob = gpt_yes_prob(args.model, prompt=PROMPT_TEMPLATE.format(para))
-            print('\n\n\n')
-            print('*' * 50)
-            print('\n\n\n')
+        paras = [p.strip() for p in paras if len(p.strip()) > 0]
+
+        para = paras[np.random.randint(len(paras))]
+        source = row['source']
+
+        if source == 'mimic':
+            import json
+            meta = json.loads(row['meta'])
+            assert meta['note_type'] in {'Discharge summary', 'Radiology'}
+            source_doc_desc = meta['note_type']
+            if meta['note_type'] == 'Radiology':
+                source_doc_desc += ' Report'
+        else:
+            source_doc_desc = SOURCE_DESCRIPTIONS[source]
+
+        print(para)
+        print('\n')
+
+        prompt = PROMPT_TEMPLATE.format(para, source_doc_desc)
+
+        if args.model == 'mixtral':
+            y_prob = mixtral_likert(model, tokenizer, prompt=prompt)
+        else:
+            y_prob = gpt_score(args.model, prompt=prompt)
+        print('\n\n\n')
+        print('*' * 50)
+        print('\n\n\n')

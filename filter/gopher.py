@@ -1,9 +1,10 @@
+import multiprocess
 import re
 import string
 from collections import Counter
 
 import argparse
-from datasets import load_dataset
+from datasets import concatenate_datasets, load_from_disk
 import numpy as np
 from nltk.tokenize import word_tokenize
 
@@ -257,31 +258,57 @@ def score_with_gopher(doc, rep_filter, quality_filter):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Running LLM-based quality filter on paragraphs for different datasets.')
-    
-    parser.add_argument('--hf_path', default='medarc/clinical_pile_v1_minhash_deduped')  # _sentence_deduped
+
+    parser.add_argument('--pile_path', default='/weka/home-griffin/clinical_pile/v1/dataset_hf_minhash')  # _sentence_deduped
     parser.add_argument('--removed_out_dir', default='/weka/home-griffin/clinical_pile/v1/docs_removed_by_gopher')  # _sentence_deduped
+    parser.add_argument('--excluded_sources', default='code|gutenberg_books')  # _sentence_deduped
 
     args = parser.parse_args()
 
-    save_dir = args.hf_path + '_gopher_deduped'
+    save_dir = args.pile_path + '_gopher'
 
-    data = load_dataset(args.hf_path, split='train')
+    excluded_sources = set(args.excluded_sources.split('|'))
+
+    data = load_from_disk(args.pile_path)
+    N = len(data)
+
+    # Save these sources from being filtered and add them back later
+    set_aside = data.filter(
+        lambda row: row['source'] in excluded_sources,
+        num_proc=multiprocess.cpu_count()
+    )
+
+    data = data.filter(
+        lambda row: row['source'] not in excluded_sources,
+        num_proc=multiprocess.cpu_count()
+    )
+
+    print(f'Setting aside {len(set_aside)} documents which we will not pass to Gopher filter.')
 
     rep_filter = GopherRepetitionFilter()
-    quality_filter = GopherQualityFilter(max_symbol_word_ratio=None)
+
+    # We use "#" for document structure. Don't want to remove documents with these symbols
+    # Max doc words should be none or else it will remove all books.
+    quality_filter = GopherQualityFilter(max_symbol_word_ratio=None, max_doc_words=None)
 
     prev_n = len(data)
     data = data.map(
         lambda doc: score_with_gopher(doc, rep_filter, quality_filter),
-        num_proc=64
+        num_proc=multiprocess.cpu_count()
     )
 
-    removed = data.filter(lambda row: len(row['gopher_reason']) > 1)
+    removed = data.filter(
+        lambda row: len(row['gopher_reason']) > 1,
+        num_proc=multiprocess.cpu_count()
+    )
 
-    print(f'Saving {len(removed)} removed examples to {args.removed_out_dir}')
+    print(f'Saving {len(removed)} removed examples to {args.removed_out_dir} for debugging.')
     removed.save_to_disk(args.removed_out_dir)
 
-    data = data.filter(lambda row: len(row['gopher_reason']) == 0)
+    data = data.filter(
+        lambda row: len(row['gopher_reason']) == 0,
+        cpu_count=multiprocess.cpu_count()
+    )
     n = len(data)
 
     for k, ct in Counter(removed['gopher_reason']).most_common():
@@ -290,5 +317,13 @@ if __name__ == '__main__':
     print(f'Removed {prev_n - n} samples removed because of Gopher Rules')
     data = data.remove_columns(['gopher_reason'])
 
-    print(f'Saving {len(data)} examples to {save_dir}')
-    data.push_to_hub(save_dir)
+    print(f'Adding back {len(set_aside)} documents to {len(data)} Gopher-filtered documents.')
+    data = concatenate_datasets([set_aside, data])
+    print(f'Saving {len(data)} of {N} original to {save_dir}...')
+    data.save_to_disk(save_dir)
+
+    print('Cleaning up cache...')
+    # TBs of cache files are saved
+    data.cleanup_cache_files()
+    set_aside.cleanup_cache_files()
+    removed.cleanup_cache_files()
