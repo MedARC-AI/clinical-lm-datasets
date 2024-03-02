@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from glob import glob
 
 import argparse
+from nltk import sent_tokenize
 from datasets import Dataset, concatenate_datasets, load_dataset
 from datatrove.executor.local import LocalPipelineExecutor
 from datatrove.pipeline.dedup.sentence_dedup import SentenceDedupFilter, SentenceDedupSignature, SentenceFindDedups
@@ -29,9 +30,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     excluded_sources = set(args.excluded_sources.split('|'))
+
+    # Need fewer than 312,748 sentences
     print(f'Excluding ', excluded_sources)
     def filter_func(row, to_remove=excluded_sources):
-        return row['source'] not in to_remove
+        return row['source'] not in to_remove and sent_tokenize(row['text']) < 10000
 
     loader = HuggingFaceDatasetReader(
         dataset=args.pile_path,
