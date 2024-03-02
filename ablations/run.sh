@@ -1,12 +1,13 @@
 #!/bin/bash
 
 EXPERIMENT=$1
+
 WANDB_ENTITY="griffin-adams"
 WANDB_PROJECT="stable-health"
 SIZE="1.8B"
 MODEL="Qwen/Qwen1.5-${SIZE}"
 OUT_DIR="/weka/home-griffin/weights/${MODEL}/${EXPERIMENT}"
-DATASET="medarc/clinical_pile_v1_minhash_deduped_tokenized"
+DATASET="/weka/home-griffin/clinical_pile/v1/tokenized/dataset_hf_${EXPERIMENT}"
 LR=3e-5
 TARGET_BATCH_SIZE=512
 PER_DEVICE_BS=1
@@ -15,11 +16,18 @@ EFFECTIVE_BATCH_SIZE=$(($PER_DEVICE_BS * $NUM_GPUS))
 GRAD_ACCUM=$(($TARGET_BATCH_SIZE / $EFFECTIVE_BATCH_SIZE))
 CONTEXT_LENGTH=8192
 
+echo "Generating the ablation dataset if it does not exist..."
+cd /weka/home-griffin/clinical-lm-datasets/tokenize
+python3 build_dataset.py --reweighting_config $EXPERIMENT
+
+cd /weka/home-griffin/clinical-lm-datasets/ablations
+echo "Now beginning to train!"
+
 echo "Batch size of ${PER_DEVICE_BS}"
 echo "Gradient Accumulation Steps of ${GRAD_ACCUM}"
 
 echo "Will save model weights to ${OUT_DIR}..."
-python train.py \
+python3 train.py \
 --model_name $MODEL \
 --output_dir $OUT_DIR \
 --project_name $WANDB_PROJECT \

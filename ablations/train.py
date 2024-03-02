@@ -278,7 +278,7 @@ class InstructionDataset(Dataset):
 def get_dataloader(tokenizer:PreTrainedTokenizerFast, args:Dict):
     """Creates a dataset and appropriate dataloader with distributed sampler."""
     # Importing here rather than at the start to avoid multiprocessing issues
-    from datasets import Dataset, load_dataset
+    from datasets import Dataset, load_dataset, load_from_disk
 
     # # Load the source dataset
     # if args["dataset"] == "alpaca":
@@ -298,7 +298,7 @@ def get_dataloader(tokenizer:PreTrainedTokenizerFast, args:Dict):
     #     dataset = dataset.shuffle(seed=args["seed"])
     #     dataset = dataset.select(range(1000,len(dataset)))
 
-    dataset = load_dataset(args["dataset"], split='train')
+    dataset = load_from_disk(args["dataset"])
 
     print(dataset.features)
 
@@ -393,8 +393,9 @@ def save_checkpoint(args, model, rank, print_func, steps):
         cpu_state_dict = model.state_dict()
         os.makedirs(args["output_dir"], exist_ok=True)
         if rank==0:
-            print_func("Saving model")
-            save_file(cpu_state_dict, os.path.join(args["output_dir"], "model_state_dict.safetensors"))
+            out_fn = os.path.join(args["output_dir"], f"model_state_dict_{steps}.safetensors")
+            print_func(f"Saving model to {out_fn}")
+            save_file(cpu_state_dict, out_fn)
             print_func("Done", rank)
 
 # Wrap the model (LoRA policy from llama-recipes):
@@ -681,6 +682,7 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     progress_bar = tqdm(range(num_training_steps), disable=rank != 0)
     init_start_event.record()
     log_loss, log_lr = 0.0, -1
+    steps = 0
     for epoch in range(args['num_epochs']):
         update_progress_bar(progress_bar, epoch, log_loss, log_lr, rank)
         model.train()
@@ -751,6 +753,10 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
                     lr_scheduler.step()
                 progress_bar.update(1)
 
+                steps += 1
+                if args["save_model"] and steps % args["save_steps"] == 0:
+                    save_checkpoint(args, model, rank, print_func, steps)
+
             # Log memory usage after backwards
             if batch_idx == 0 and epoch == 0:
                 logger.log({"memory_after_backward": torch.cuda.memory_allocated(rank)}, rank)
@@ -801,17 +807,9 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     # End logging
     logger.finish(rank=rank)
 
-    # Save model - ref: https://github.com/pytorch/pytorch/issues/98823
+    # Save modelf - ref: https://github.com/pytorch/pytorch/issues/98823
     if args["save_model"]:
-        save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-        with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, save_policy):
-            cpu_state_dict = model.state_dict()
-            os.makedirs(args["output_dir"], exist_ok=True)
-            if rank==0:
-                print_func("Saving model")
-                save_file(cpu_state_dict, os.path.join(args["output_dir"], "model_state_dict.safetensors"))
-                print_func("Done", rank)
-
+        save_checkpoint(args, model, rank, print_func, steps)
     dist.barrier() # Stop other processes ending while model saving - probably not needed?
 
     # Clean up

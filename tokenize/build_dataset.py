@@ -67,7 +67,7 @@ def main(args):
     )
 
     print(f'Uploading {len(train_tokenized_dataset)} packed tokenized examples from {len(tokenized_dataset)} documents to {args.out_dir}')
-    train_tokenized_dataset.push_to_hub(args.out_dir, private=True)
+    train_tokenized_dataset.save_to_disk(args.out_dir)
 
     args.out_fn = args.tokenized_dir + '_mixture.csv'
 
@@ -79,13 +79,13 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Re-weight and tokeniz dataset")
+    parser = argparse.ArgumentParser(description="Re-weight and tokenize dataset")
     parser.add_argument('--seed', type=int, default=1992, help='Random seed')
     parser.add_argument('--num_proc', default=multiprocess.cpu_count(), type=int)
     parser.add_argument('--max_seq_length', type=int, default=8192, help='Sequence length for processing')
     parser.add_argument('--tokenizer', type=str, default='Qwen/Qwen1.5-0.5B', help='Tokenizer model to use')
     parser.add_argument('--dataset', type=str, default='/weka/home-griffin/clinical_pile/v1/dataset_hf', help='Name of the dataset to process')
-    parser.add_argument('--target_num_tokens', type=int, required=True)
+    parser.add_argument('--target_num_tokens', type=int, default=int(2e10))
     parser.add_argument('--reweighting_config', type=str, default='all')
     parser.add_argument('--tokenized_dir', default='/weka/home-griffin/clinical_pile/v1/tokenized')
     parser.add_argument('--out_dir', default=None)
@@ -95,4 +95,10 @@ if __name__ == '__main__':
     if args.out_dir is None:
         args.out_dir = os.path.join(args.tokenized_dir, f'dataset_hf_{args.reweighting_config}')
         print(f'Did\'nt set --out_dir, so will be pushing dataset to default --> {args.out_dir}')
+    
+    if os.path.exists(args.out_dir):
+        print(f'{args.out_dir} already exists. Remove the file before re-running this script.')
+        print(f'rm -rf {args.out_dir}')
+        exit(0)
+
     main(args)

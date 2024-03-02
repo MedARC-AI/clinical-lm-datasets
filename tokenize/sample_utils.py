@@ -6,7 +6,7 @@ from tqdm import tqdm
 np.random.seed(1992)
 import os
 import pandas as pd
-from datasets import Dataset, concatenate_datasets
+import itertools
 
 
 def sample_dataset(dataset, reweighting_config, target_num_tokens):
@@ -14,6 +14,10 @@ def sample_dataset(dataset, reweighting_config, target_num_tokens):
     cwd = os.path.dirname(os.path.abspath(__file__))
     mixtures = pd.read_csv(os.path.join(cwd, 'mixtures', f'{reweighting_config}.csv'))
     keep_prob_by_source = dict(zip(mixtures['source'], mixtures['weight']))
+
+    # Assert our re-weighting config naming matches the naming convention from the dataset
+    for k in keep_prob_by_source:
+        assert k in sources
 
     for source in sources:
         if source not in keep_prob_by_source:
@@ -24,17 +28,16 @@ def sample_dataset(dataset, reweighting_config, target_num_tokens):
         if keep_prob == 0:
             return 0
         elif keep_prob < 1:
-            return np.random.random() < keep_prob
+            return 1 if np.random.random() < keep_prob else 0
         else:
             return int(keep_prob)
 
     source_arr = dataset['source']
-    import itertools
     N = len(dataset)
 
     print('Sampling dataset indices according to re-weighting config...')
     keep_idxs = list(itertools.chain(
-        *[[i] * sample_number_to_include(keep_prob_by_source[source_arr[i]]) for i in range(N)]
+        *list(map(lambda i: [i] * sample_number_to_include(keep_prob_by_source[source_arr[i]]), tqdm(range(N), total=N)))
     ))
 
     # Shuffle the order
@@ -51,15 +54,9 @@ def sample_dataset(dataset, reweighting_config, target_num_tokens):
         keep_idxs = keep_idxs[:num_to_keep]
 
     dataset = dataset.select(keep_idxs)
-    toks_by_src = defaultdict(int)
-    docs_by_src = defaultdict(int)
-    for row in tqdm(dataset):
-        source = row['source']
-        toks_by_src[source] += row['num_tokens']
-        docs_by_src[source] += 1
 
     print('Converting to Pandas DataFrame to record mixtures with groupby...')
-    source_stats = dataset.remove_columns(['id', 'uuid', 'meta', 'text']).to_pandas().groupby('source')
+    source_stats = dataset.remove_columns(['id', 'uuid', 'text']).to_pandas().groupby('source')
     stats = []
     for source, df in source_stats:
         stats.append({

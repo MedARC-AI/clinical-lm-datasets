@@ -9,7 +9,7 @@ import torch
 from datasets import load_from_disk
 from openai import AzureOpenAI
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 
 PROMPT_TEMPLATE = ("""
@@ -51,6 +51,7 @@ SOURCE_DESCRIPTIONS = {
     'pubmed': 'a PubMed Journal Article',
     'mimic': 'a Clinical Note',
     'wikidoc': 'a Wikidoc Textbook Chapter',
+    'wikipedia': 'a Wikipedia Article',
     'refined_web': 'a Web Page',
     'pes2o': 'an Academic Article',
     'nih_grant_abstracts': 'a Abstract of a Grant submitted to the National Institutes of Health (NIH)',
@@ -110,13 +111,25 @@ if __name__ == '__main__':
     data = data.filter(lambda row: row['source'] not in excluded_sources)
     filt_N = len(data)
 
+    # Shuffle
+    idxs = np.arange(filt_N)
+    np.random.shuffle(idxs)
+    data = data.select(idxs)
+
     print(f'Left with {filt_N} / {N} examples...')
 
     if args.model == 'mixtral':
+        # quantization_config = BitsAndBytesConfig(
+        #     load_in_8bit=True,
+        #     bnb_8bit_compute_dtype=torch.bfloat16
+        # )
+
         model = AutoModelForCausalLM.from_pretrained(
             MODELS[args.model],
-            torch_dtype='auto',
+            # torch_dtype='bfloat16',
+            load_in_8bit=True,
             attn_implementation='flash_attention_2',
+            # quantization_config=quantization_config,
             device_map='auto',
         ).eval()
         tokenizer = AutoTokenizer.from_pretrained(MODELS[args.model])
@@ -133,6 +146,23 @@ if __name__ == '__main__':
     for row in tqdm(data):
         paras = re.split('\n\n', row['text'])
         paras = [p.strip() for p in paras if len(p.strip()) > 0]
+
+        def group_headers(arr):
+            new_arr = []
+            curr_para = []
+
+            for x in arr:
+                curr_para.append(x)
+                if not x.startswith('#') or '\n' in x:
+                    new_arr.append('\n'.join(curr_para))
+                    curr_para = []
+
+            if len(curr_para) > 0:
+                new_arr.append('\n'.join(curr_para))
+            return new_arr
+
+        # Sometimes headers are alone. If so, group them with next paragraph
+        paras = group_headers(paras)
 
         para = paras[np.random.randint(len(paras))]
         source = row['source']
@@ -153,9 +183,11 @@ if __name__ == '__main__':
         prompt = PROMPT_TEMPLATE.format(para, source_doc_desc)
 
         if args.model == 'mixtral':
-            y_prob = mixtral_likert(model, tokenizer, prompt=prompt)
+            likert = mixtral_likert(model, tokenizer, prompt=prompt)
         else:
-            y_prob = gpt_score(args.model, prompt=prompt)
+            likert = gpt_score(args.model, prompt=prompt)
+
+        print(likert)
         print('\n\n\n')
         print('*' * 50)
         print('\n\n\n')
