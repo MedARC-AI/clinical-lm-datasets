@@ -1,5 +1,6 @@
 import multiprocess
 import argparse
+import json
 import numpy as np
 import os
 np.random.seed(1992)
@@ -16,7 +17,21 @@ def should_keep(keep_prob):
     return np.random.random() < keep_prob
 
 
-def main(args):
+def dump_jsonl(args):
+    # Don't need meta for final tokenized dataset. Just "text" and "source".
+    raw_dataset = load_from_disk(args.dataset).remove_columns('meta')
+
+    reweighted_dataset, data_mixture = sample_dataset(raw_dataset, reweighting_config=args.reweighting_config, target_num_tokens=args.target_num_tokens)
+
+    from tqdm import tqdm
+    print(f'Writing {len(reweighted_dataset)} lines to {args.out_fn}')
+    with open(args.out_fn, 'w') as f:
+        for row in tqdm(reweighted_dataset):
+            f.write(json.dumps({'text': row['text']}))
+            f.write('\n')
+
+
+def tokenize(args):
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     # Don't need meta for final tokenized dataset. Just "text" and "source".
     raw_dataset = load_from_disk(args.dataset).remove_columns('meta')
@@ -87,18 +102,33 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='/weka/home-griffin/clinical_pile/v1/dataset_hf', help='Name of the dataset to process')
     parser.add_argument('--target_num_tokens', type=int, default=int(2e10))
     parser.add_argument('--reweighting_config', type=str, default='all')
-    parser.add_argument('--tokenized_dir', default='/weka/home-griffin/clinical_pile/v1/tokenized')
+    parser.add_argument('-axolotl', default=False, action='store_true')
+    parser.add_argument('--tokenized_dir', default='/weka/home-griffin/clinical_pile/v1')
     parser.add_argument('--out_dir', default=None)
+    parser.add_argument('--out_fn', default=None)
 
     args = parser.parse_args()
 
     if args.out_dir is None:
-        args.out_dir = os.path.join(args.tokenized_dir, f'dataset_hf_{args.reweighting_config}')
-        print(f'Did\'nt set --out_dir, so will be pushing dataset to default --> {args.out_dir}')
+        if args.axolotl:
+            args.out_dir = os.path.join(args.tokenized_dir, 'axolotl')
+            os.makedirs(args.out_dir, exist_ok=True)
+            args.out_fn = os.path.join(args.out_dir, f'{args.reweighting_config}.jsonl')
+        else:
+            args.out_dir = os.path.join(args.tokenized_dir, 'tokenized', f'dataset_hf_{args.reweighting_config}')
+        print(f'Didn\'t set --out_dir, so will be pushing dataset to default --> {args.out_dir}')
     
-    if os.path.exists(args.out_dir):
+    if not args.axolotl and os.path.exists(args.out_dir):
         print(f'{args.out_dir} already exists. Remove the file before re-running this script.')
         print(f'rm -rf {args.out_dir}')
         exit(0)
 
-    main(args)
+    if args.out_fn is not None and os.path.exists(args.out_fn):
+        print(f'{args.out_fn} already exists. Remove the file before re-running this script.')
+        print(f'rm {args.out_fn}')
+        exit(0)
+
+    if args.axolotl:
+        dump_jsonl(args)
+    else:
+        tokenize(args)

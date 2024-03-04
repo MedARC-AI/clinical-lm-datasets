@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 CONFIG=$1
 EXPERIMENT=$2
 

@@ -31,7 +31,6 @@ from fastcore.script import call_parse, bool_arg, Param
 
 # Torch + distributed training
 from torch import nn, Tensor
-from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -275,10 +274,10 @@ class InstructionDataset(Dataset):
         }
 
 # And to get the dataloader
-def get_dataloader(tokenizer:PreTrainedTokenizerFast, args:Dict):
+def get_dataloader(tokenizer:PreTrainedTokenizerFast, args:Dict, rank, world_size):
     """Creates a dataset and appropriate dataloader with distributed sampler."""
     # Importing here rather than at the start to avoid multiprocessing issues
-    from datasets import Dataset, load_dataset, load_from_disk
+    from datasets import load_from_disk
 
     # # Load the source dataset
     # if args["dataset"] == "alpaca":
@@ -298,7 +297,8 @@ def get_dataloader(tokenizer:PreTrainedTokenizerFast, args:Dict):
     #     dataset = dataset.shuffle(seed=args["seed"])
     #     dataset = dataset.select(range(1000,len(dataset)))
 
-    dataset = load_from_disk(args["dataset"])
+    # dataset = load_from_disk(args['dataset'], keep_in_memory=True)
+    dataset = Dataset.from_list(f'data-0000{rank}-of-0000{world_size}.arrow', in_memory=True)
 
     print(dataset.features)
 
@@ -507,7 +507,7 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     tokenizer.pad_token_id = tokenizer.eos_token_id # TODO check if it exists first
 
     # Set up dataloader
-    dataloader = get_dataloader(tokenizer, args)
+    dataloader = get_dataloader(tokenizer, args, rank, world_size)
 
     # Create model
     attn_impl = "sdpa" # torch 2.2 sdpa uses flash attn 2
@@ -652,7 +652,6 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
         print(model)
         print("Starting training")
 
-
     # Create the optimizer
     optimizer = get_optimizer(model, args)
 
@@ -666,7 +665,6 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
         for group in optimizer.param_groups:
             for param in group['params']:
                 print(f"Shape: {param.shape}, Requires Grad: {param.requires_grad}")
-
 
     # Autocast for mixed precision with fp16/bf16 compute types with fp32 params
     if args["precision"] in ["fp16_autocast", "bf16_autocast", "bf16_buffers_autocast"]:

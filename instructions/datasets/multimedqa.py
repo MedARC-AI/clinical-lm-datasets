@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from datasets import Dataset, DatasetDict, load_dataset
-from utils import *
+from instructions.datasets.utils import *
 
 
 OUT_DIR = '/weka/home-griffin/clinical_instructions/multimedqa'

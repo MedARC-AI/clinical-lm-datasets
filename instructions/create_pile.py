@@ -16,8 +16,8 @@ import pandas as pd
 
 
 BASE_DIR = '/weka/home-griffin/clinical_instructions'
-OUT_DIR = os.path.join(BASE_DIR, 'v1')
-os.makedirs(OUT_DIR, exist_ok=True)
+PILE_DIR = os.path.join(BASE_DIR, 'v1')
+os.makedirs(PILE_DIR, exist_ok=True)
 
 
 @dataclass
@@ -28,10 +28,10 @@ class Source:
 
 SOURCES = [
     Source(name='multimedqa', hf_path='multimedqa/dataset_hf'),
-    Source(name='medalpaca_flashcards', hf_path='medalpaca/flashcards_hf'),
-    Source(name='medalpaca_wikidoc_patient', hf_path='medalpaca/wikidoc_patient_hf'),
-    Source(name='mednli', hf_path='mednli/dataset_hf'),
-    Source(name='chat_doctor', hf_path='ChatDoctor/dataset_hf'),
+    # Source(name='medalpaca_flashcards', hf_path='medalpaca/flashcards_hf'),
+    # Source(name='medalpaca_wikidoc_patient', hf_path='medalpaca/wikidoc_patient_hf'),
+    # Source(name='mednli', hf_path='mednli/dataset_hf'),
+    # Source(name='chat_doctor', hf_path='ChatDoctor/dataset_hf'),
 ]
 
 
@@ -49,9 +49,18 @@ def get_token_ct(text):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Combining individual dataset for Clinical PILE v1')
 
-    parser.add_argument('--hub_name', default=None, type=str)
+    parser.add_argument('--output_format', default='hf', choices=['hf', 'jsonl'])
+    parser.add_argument('--out_dir', default=None)
 
     args = parser.parse_args()
+
+    if args.out_fn is None:
+        if args.output_format == 'jsonl':
+            args.out_dir = os.path.join(PILE_DIR, 'jsonl')
+        else:
+            args.out_dir = os.path.join(PILE_DIR, 'dataset_hf')
+        
+    os.makedirs(exist_ok=True)
 
     new_splits = {'train': [], 'validation': [], 'test': []}
     stats = []
@@ -118,17 +127,23 @@ if __name__ == '__main__':
         new_splits[split].append(split_data)
     
     new_splits = {k: concatenate_datasets(v) for k, v in new_splits.items()}
-    assert len(new_splits) == len(set(new_splits['id']))
-    if args.hub_name is None:
-        out_dir = os.path.join(OUT_DIR, 'dataset_hf')
+    
+    if args.output_format == 'hf':
+        new_splits = DatasetDict(new_splits)
+        new_splits.save_to_disk(args.out_dir)
+    elif args.output_format == 'jsonl':
+        # prompt and completion
+        import json
+        for split, data in new_splits.items():
+            out_fn = os.path.join(args.out_dir, f'{split}.jsonl')
+            with open(out_fn, 'w') as fd:
+                for row in data:
+                    fd.write(json.dumps({
+                        'prompt': row['prompt'], 'completion': 'completion',
+                    }) + '\n')
 
-        print(f'Saving {len(new_splits)} examples to {out_dir}')
-        new_splits.save_to_disk(out_dir)
-    else:
-        print(f'Pushing PILE ({len(new_splits)}) to HuggingFace Hub --> {args.hub_name}')
-        new_splits.push_to_hub(args.hub_name)
     stats = pd.DataFrame(stats)
-    out_fn =  os.path.join(OUT_DIR, 'sources.csv')
+    out_fn =  os.path.join(args.out_dir, 'sources.csv')
     print(f'Saving information on all {len(stats)} sources in Clinical PILE to {out_fn}')
     stats.to_csv(out_fn, index=False)
 

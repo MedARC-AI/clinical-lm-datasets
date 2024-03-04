@@ -1,14 +1,16 @@
 import os
 import regex as re
+import string
 
 import argparse
 import pandas as pd
 import numpy as np
 np.random.seed(1992)
 import torch
-from datasets import load_from_disk
+from datasets import load_from_disk, Dataset
 from openai import AzureOpenAI
 from tqdm import tqdm
+import json
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 
@@ -35,7 +37,7 @@ DO NOT provide an explanation.
 
 
 ANSWER_PREFIX = 'Answer (1-5): '
-MIXTRAL_TEMPERATURE = 0.1
+
 
 LIKERT_IDS = [
     28740, 28750, 28770, 28781, 28782
@@ -49,7 +51,7 @@ MODELS = {
 
 SOURCE_DESCRIPTIONS = {
     'pubmed': 'a PubMed Journal Article',
-    'mimic': 'a Clinical Note',
+    # 'mimic': 'a Clinical Note',
     'wikidoc': 'a Wikidoc Textbook Chapter',
     'wikipedia': 'a Wikipedia Article',
     'refined_web': 'a Web Page',
@@ -100,8 +102,14 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='mixtral', choices=list(MODELS.keys()))
     parser.add_argument('--paras_per_doc', default=1)
     parser.add_argument('--excluded_sources', default='gutenberg_books|code')
+    parser.add_argument('--max_para_toks', default=1024, type=int)
+    parser.add_argument('--data_dir', default='/weka/home-griffin/clinical_pile/v1/dataset_hf_50k_sample', type=str)
+    parser.add_argument('-overwrite', default=False, action='store_true')
 
     args = parser.parse_args()
+
+    out_dir = args.data_dir + '_llm_quality_scores'
+    os.makedirs(out_dir, exist_ok=True)
 
     data = load_from_disk('/weka/home-griffin/clinical_pile/v1/dataset_hf_50k_sample')
     N = len(data)
@@ -119,10 +127,10 @@ if __name__ == '__main__':
     print(f'Left with {filt_N} / {N} examples...')
 
     if args.model == 'mixtral':
-        # quantization_config = BitsAndBytesConfig(
-        #     load_in_8bit=True,
-        #     bnb_8bit_compute_dtype=torch.bfloat16
-        # )
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            bnb_8bit_compute_dtype=torch.bfloat16
+        )
 
         model = AutoModelForCausalLM.from_pretrained(
             MODELS[args.model],
@@ -143,51 +151,83 @@ if __name__ == '__main__':
             azure_deployment=os.environ.get('OPENAI_AZURE_DEPLOYMENT', None)
         )
 
-    for row in tqdm(data):
-        paras = re.split('\n\n', row['text'])
-        paras = [p.strip() for p in paras if len(p.strip()) > 0]
+    fns_to_load = []
+    for idx, row in tqdm(enumerate(data), total=len(data)):
+        out_fn = os.path.join(out_dir, f'{idx}.json')
 
-        def group_headers(arr):
-            new_arr = []
-            curr_para = []
+        fns_to_load.append(out_fn)
 
-            for x in arr:
-                curr_para.append(x)
-                if not x.startswith('#') or '\n' in x:
+        if os.path.exists(out_fn) and not args.overwrite:
+            print(f'{out_fn} exists. Run with -overwrite if you want to redo it...')
+        else:
+            paras = re.split('\n\n', row['text'])
+            paras = [p.strip() for p in paras if len(p.strip()) > 0]
+
+            def group_headers(arr):
+                new_arr = []
+                curr_para = []
+
+                for x in arr:
+                    curr_para.append(x)
+                    if not x.startswith('#') or '\n' in x:
+                        new_arr.append('\n'.join(curr_para))
+                        curr_para = []
+
+                if len(curr_para) > 0:
                     new_arr.append('\n'.join(curr_para))
-                    curr_para = []
+                return new_arr
 
-            if len(curr_para) > 0:
-                new_arr.append('\n'.join(curr_para))
-            return new_arr
+            # Sometimes headers are alone. If so, group them with next paragraph
+            paras = group_headers(paras)
 
-        # Sometimes headers are alone. If so, group them with next paragraph
-        paras = group_headers(paras)
+            para_idx = int(np.random.randint(len(paras)))
+            para = paras[para_idx]
 
-        para = paras[np.random.randint(len(paras))]
-        source = row['source']
+            if len(para.split(' ')) > args.max_para_toks:
+                para = ' '.join(para.split(' ')[:args.max_para_toks])
 
-        if source == 'mimic':
-            import json
-            meta = json.loads(row['meta'])
-            assert meta['note_type'] in {'Discharge summary', 'Radiology'}
-            source_doc_desc = meta['note_type']
-            if meta['note_type'] == 'Radiology':
-                source_doc_desc += ' Report'
-        else:
-            source_doc_desc = SOURCE_DESCRIPTIONS[source]
+            source = row['source']
 
-        print(para)
-        print('\n')
+            if source == 'mimic':
+                meta = json.loads(row['meta'])
+                assert meta['note_type'] in {'Discharge summary', 'Radiology'}
+                source_doc_desc = meta['note_type']
+                if meta['note_type'] == 'Radiology':
+                    source_doc_desc += ' Report'
+            else:
+                source_doc_desc = SOURCE_DESCRIPTIONS[source]
 
-        prompt = PROMPT_TEMPLATE.format(para, source_doc_desc)
+            # print(para)
+            # print('\n')
 
-        if args.model == 'mixtral':
-            likert = mixtral_likert(model, tokenizer, prompt=prompt)
-        else:
-            likert = gpt_score(args.model, prompt=prompt)
+            prompt = PROMPT_TEMPLATE.format(para, source_doc_desc)
 
-        print(likert)
-        print('\n\n\n')
-        print('*' * 50)
-        print('\n\n\n')
+            if args.model == 'mixtral':
+                label = mixtral_likert(model, tokenizer, prompt=prompt)
+            else:
+                label = gpt_score(args.model, prompt=prompt)
+
+            # print(label)
+            # print('\n\n\n')
+            # print('*' * 50)
+            # print('\n\n\n')
+
+            out_row = {
+                'uuid': row['uuid'],
+                'id': row['id'],
+                'source': source,
+                'text': para,
+                'label': label,
+                'paragraph_idx': para_idx,
+            }
+
+            with open(out_fn, 'w') as fd:
+                json.dump(out_row, fd)
+
+    dataset = Dataset.from_list([
+        json.load(open(fn, 'r')) for fn in fns_to_load
+    ])
+
+    hf_out = os.path.join(out_dir, 'dataset_hf')
+    print(f'Saving {len(dataset)} quality-labeled paragraphs to {hf_out}')
+    dataset.save_to_disk(hf_out)

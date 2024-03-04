@@ -34,7 +34,7 @@ if __name__ == '__main__':
     # Need fewer than 312,748 sentences
     print(f'Excluding ', excluded_sources)
     def filter_func(row, to_remove=excluded_sources):
-        return row['source'] not in to_remove and sent_tokenize(row['text']) < 10000
+        return row['source'] not in to_remove and len(sent_tokenize(row['text'])) < 10000
 
     loader = HuggingFaceDatasetReader(
         dataset=args.pile_path,

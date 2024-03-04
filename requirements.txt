@@ -16,6 +16,9 @@ networkx
 nltk
 gritlm
 orjson
+matplotlib
+seaborn
+tabulate
 webdriver-manager
 spacy
 scispacy
