@@ -7,9 +7,9 @@ EXPERIMENT=$2
 
 WANDB_ENTITY="griffin-adams"
 WANDB_PROJECT="stable-health"
-SIZE="1.8B"
+SIZE="0.5B"
 MODEL="Qwen/Qwen1.5-${SIZE}"
-OUT_DIR="/weka/home-griffin/weights/${MODEL}/${EXPERIMENT}"
+OUT_DIR="/weka/home-griffin/weights/pretrain/${MODEL}/${EXPERIMENT}"
 DATASET="/weka/home-griffin/clinical_pile/v1/tokenized/dataset_hf_${CONFIG}"
 LR=3e-5
 TARGET_BATCH_SIZE=512
@@ -24,7 +24,7 @@ source /weka/home-griffin/envs/data/bin/activate
 cd /weka/home-griffin/clinical-lm-datasets/tokenize
 python3 build_dataset.py --reweighting_config $CONFIG
 
-cd /weka/home-griffin/clinical-lm-datasets/ablations
+cd /weka/home-griffin/clinical-lm-datasets/train
 source /weka/home-griffin/envs/train/bin/activate
 
 echo "Now beginning to train!"
@@ -46,10 +46,10 @@ python3 train.py \
 --use_gradient_checkpointing false \
 --use_cpu_offload false \
 --dataset $DATASET \
---profile_memory true \
 --verbose true \
 --lr $LR \
 --save_model true \
---save_steps 1000 \
+--save_steps 500 \
 --log_to wandb \
 --lr_scheduler cosine \
+--mode pretrain \

@@ -3,7 +3,8 @@ import os
 from dataclasses import dataclass
 from typing import Callable
 
-from datasets import Dataset, DatasetDict, load_dataset
+import argparse
+from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 from instructions.datasets.utils import *
 
 
@@ -27,19 +28,19 @@ class MultiMedQAConfigs:
 
 ALL_CONFIGS = [
     MultiMedQAConfigs(
-        name='pubmedqa',
-        hf_args=('bigbio/pubmed_qa', 'pubmed_qa_labeled_fold0_source'),
-        instruction='Answer this Yes/No/Maybe question using the following PubMed abstract as evidence by writing the letter associated with the correct answer.',
-        input_to_prompt=input_to_prompt_pubmedqa,
-        input_to_target=input_to_target_pubmedqa,
-        cot_col='LONG_ANSWER'
-    ),
-    MultiMedQAConfigs(
         name='pubmedqa_artificial',
-        hf_args=('bigbio/pubmed_qa', 'pubmed_qa_artificial_source'),
+        hf_args=('/weka/home-griffin/clinical_instructions/multimedqa/pubmedqa/artificial_hf', ),  # ('bigbio/pubmed_qa', 'pubmed_qa_artificial_source'),
         instruction='Answer this Yes/No question using the following PubMed abstract as evidence by writing the letter associated with the correct answer.',
         input_to_prompt=input_to_prompt_pubmedqa,
         input_to_target=input_to_target_pubmedqa_artificial,
+        cot_col='LONG_ANSWER'
+    ),
+    MultiMedQAConfigs(
+        name='pubmedqa_labeled',
+        hf_args=('/weka/home-griffin/clinical_instructions/multimedqa/pubmedqa/labeled_hf', ), # ('bigbio/pubmed_qa', 'pubmed_qa_labeled_fold0_source'),
+        instruction='Answer this Yes/No/Maybe question using the following PubMed abstract as evidence by writing the letter associated with the correct answer.',
+        input_to_prompt=input_to_prompt_pubmedqa,
+        input_to_target=input_to_target_pubmedqa,
         cot_col='LONG_ANSWER'
     ),
     MultiMedQAConfigs(
@@ -61,6 +62,21 @@ ALL_CONFIGS = [
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser('Pre-processing MultiMedQA training dataset.')
+
+    parser.add_argument('-add_cot', default=False, action='store_true')
+
+    args = parser.parse_args()
+
+    if args.add_cot:
+        out_dir = os.path.join(OUT_DIR, 'dataset_cot_hf')
+    else:
+        out_dir = os.path.join(OUT_DIR, 'dataset_hf')
+
+    if os.path.exists(out_dir):
+        print(f'{out_dir} exists already. Before re-running, run "rm -rf {out_dir}"')
+        exit(0)
+
     outputs = {
         'train': [],
         'validation': [],
@@ -68,8 +84,13 @@ if __name__ == '__main__':
     }
 
     for config in ALL_CONFIGS:
-        dataset = load_dataset(*config.hf_args)
-
+        print(f'Processing {config.name}...')
+        try:
+            dataset = load_from_disk(*config.hf_args)
+        except:
+            print('Loading from the Hub...')
+            dataset = load_dataset(*config.hf_args)
+        
         for split in ['train', 'validation', 'test']:
             config_split_name = getattr(config, f'{split}_split')
             if config_split_name not in dataset:
@@ -86,13 +107,14 @@ if __name__ == '__main__':
                 else:
                     instruction = config.instruction
 
-                prompt = f'<<Instruction:>> {instruction}\n----\n{config.input_to_prompt(example)}'
-                # Important Make sure prompt has a trailing space
-                prompt = prompt.strip() + ' '
-                completion = config.input_to_target(example)
-                explanation = '' if config.cot_col is None else example[config.cot_col]
+                explanation = example[config.cot_col] if config.cot_col is not None and args.add_cot else ''
                 if explanation is None:  # For MedMCQA sometimes they are none
-                    explanation = '' 
+                    explanation = ''
+                elif args.add_cot:
+                    instruction += ' Explain your answer.'
+                prompt = f'# INSTRUCTION\n{instruction}\n\n{config.input_to_prompt(example, explanation)}'
+                # Important Make sure prompt has a trailing space
+                completion = config.input_to_target(example)
 
                 out_row = {
                     'id': id,
@@ -109,7 +131,5 @@ if __name__ == '__main__':
     
     outputs = DatasetDict(outputs)
 
-    out_dir = os.path.join(OUT_DIR, 'dataset_hf')
     print(f'Saving multimedqa training set to {out_dir}')
     outputs.save_to_disk(out_dir)
-    # outputs.push_to_hub('medarc/sft_multimedqa')

@@ -1,0 +1,15 @@
+#!/bin/bash
+
+set -e
+
+# sbatch pretrain_slurm.sh all all_v1
+sbatch pretrain_slurm.sh light_pubmed_general light_pubmed_general_v1
+sbatch pretrain_slurm.sh light_pubmed_heavy_clinical light_pubmed_heavy_clinical_v1
+# sbatch pretrain_slurm.sh pubmed pubmed_v1
+sbatch pretrain_slurm.sh pubmed_clinical pubmed_clinical_v1
+sbatch pretrain_slurm.sh pubmed_code pubmed_code_v1
+sbatch pretrain_slurm.sh pubmed_general pubmed_general_v1
+sbatch pretrain_slurm.sh pubmed_heavy_code pubmed_heavy_code_v1
+sbatch pretrain_slurm.sh pubmed_heavy_reference pubmed_heavy_reference_v1
+sbatch pretrain_slurm.sh pubmed_light_general pubmed_light_general_v1
+sbatch pretrain_slurm.sh pubmed_reference pubmed_reference_v1

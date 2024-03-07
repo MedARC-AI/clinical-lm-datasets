@@ -9,6 +9,7 @@ selenium
 jupyter
 black
 autopep8
+evaluate
 pandas
 ftfy
 markdownify

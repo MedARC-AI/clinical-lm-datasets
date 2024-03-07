@@ -24,6 +24,8 @@ def extract_data(link):
     if downloaded is None:
         print(f'Failed to download {link}')
         return None
+
+    # TODO - Extract elements themselves
     result = extract(downloaded)
     end_of_headers = re.search(r'statpearls \[internet\]\.show details', result, flags=re.IGNORECASE)
     references_match = re.search(r'\nreferences\n', result, flags=re.IGNORECASE)

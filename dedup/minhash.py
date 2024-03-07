@@ -50,8 +50,7 @@ if __name__ == '__main__':
             # dataset_options={'split': 'train'},
             progress=True,
             text_key='text',
-            # TODO change this to "uuid"
-            id_key='id',
+            id_key='uuid',
         )
         # you can also change ngrams or the number of buckets and their size here
         minhash_config = MinhashConfig(use_64bit_hashes=True)  # better precision -> fewer false positives (collisions)
@@ -136,16 +135,16 @@ if __name__ == '__main__':
 
                     line = json.loads(line)
                     assert type(line) == dict
+                    # This stays as ID since it's what DataTrove is using -- we set datatrove.id to our uuid
                     ids_to_remove.add(line['id'])
 
         n = len(unfiltered_dataset)
-        # TODO change to UUID
         # Either it's been saved by min-hash deduping or it's one of our "always save all" keep_all_source_set category
         print(f'Keep each document if either:')
         print(f'- ID is not one of the {len(ids_to_remove)} documents to be removed.')
         print(f'- or source is in an always save category ({args.keep_all_source_list.split}).')
         filtered_dataset = unfiltered_dataset.filter(
-            lambda row: row['id'] not in ids_to_remove or row['source'] in keep_all_source_set,
+            lambda row: row['uuid'] not in ids_to_remove or row['source'] in keep_all_source_set,
             num_proc=multiprocess.cpu_count()
         )
 

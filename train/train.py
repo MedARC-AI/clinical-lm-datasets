@@ -22,9 +22,12 @@ import bitsandbytes as bnb
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from contextlib import nullcontext
+import numpy as np
 from safetensors.torch import save_file
 from tqdm.auto import tqdm
 from typing import List, Dict
+from datasets import load_from_disk, Dataset as HFDataset
+import h5py
 
 # Argument parsing
 from fastcore.script import call_parse, bool_arg, Param
@@ -222,7 +225,7 @@ class PreTokenizedDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        return self.dataset[index]['input_ids']
+        return self.dataset[index]
 
 # Dataset class
 class InstructionDataset(Dataset):
@@ -236,6 +239,10 @@ class InstructionDataset(Dataset):
 
     def __getitem__(self, index):
         IGNORE_INDEX = -100  # The default setting in CrossEntropyLoss
+        if self.style == 'medqa':
+            ex = self.dataset[index]
+            prompt = ex['prompt']
+            example = prompt + ex['completion']
         if self.style == "guanaco":
             prompt = self.dataset[index]["text"].split("### Assistant: ")[0]
             example = self.dataset[index]["text"]
@@ -273,46 +280,76 @@ class InstructionDataset(Dataset):
             "attention_mask": example_mask.tolist(),
         }
 
-# And to get the dataloader
-def get_dataloader(tokenizer:PreTrainedTokenizerFast, args:Dict, rank, world_size):
-    """Creates a dataset and appropriate dataloader with distributed sampler."""
-    # Importing here rather than at the start to avoid multiprocessing issues
-    from datasets import load_from_disk
 
-    # # Load the source dataset
-    # if args["dataset"] == "alpaca":
-    #     dataset = load_dataset("yahma/alpaca-cleaned")['train']
-    # elif args["dataset"] == "alpaca_sample":
-    #     dataset = load_dataset("yahma/alpaca-cleaned", split="train[:128]")
-    # elif args["dataset"] == "dummy":
-    #     dataset = Dataset.from_dict({
-    #         'instruction': ["instruction"]*16,
-    #         'input': ["input"]*16,
-    #         'output': ["output"*10000]*16} # A long output to test memory usage (gets truncated)
-    #     )
-    # elif args["dataset"] == "guanaco":
-    #     dataset = load_dataset("timdettmers/openassistant-guanaco", split="train")
-    # elif args["dataset"] == "sql":
-    #     dataset = load_dataset("knowrohit07/know_sql")['validation']
-    #     dataset = dataset.shuffle(seed=args["seed"])
-    #     dataset = dataset.select(range(1000,len(dataset)))
+def get_fake_dataloader():
+    def collate_fn(batch):
+        input_ids = batch
+        input_ids = torch.LongTensor(np.concatenate(input_ids)).unsqueeze(0)
+        labels = input_ids.clone()  # LM loss (they will be shifted over in model)
+        return {'input_ids': input_ids, 'attention_mask': None, 'labels': labels}
 
-    # dataset = load_from_disk(args['dataset'], keep_in_memory=True)
-    dataset = Dataset.from_list(f'data-0000{rank}-of-0000{world_size}.arrow', in_memory=True)
+    import json
+    
+    class PreTokenizedDataset(Dataset):
+        def __init__(self):
+            pass
 
-    print(dataset.features)
+        def __len__(self):
+            return 51200
 
-    # truncate dataset so it's evenly divisible by grad_accumulation_steps
-    dataset = dataset.select(range(0, len(dataset)-len(dataset)%(args["batch_size"]*args["gradient_accumulation_steps"])))
+        def __getitem__(self, index):
+            return np.array(np.zeros(shape=(8192, )))
+            # with open(r'/weka/home-griffin/clinical_pile/v1/tokenized/dummy_input_ids.json', 'r') as fd:
+            #     return np.array(json.load(fd)['input_ids'])
+
+    dataset = PreTokenizedDataset()
+    dataloader = DataLoader(dataset, batch_size=1, collate_fn=collate_fn)  #, sampler=sampler)
+
+    return dataloader
+
+
+def get_sharded_h5_dataloader(args:Dict, rank, world_size):
+    fn = os.path.join(args['dataset'], f'{rank}.h5')
+    print(f'Rank: {rank}/{world_size} - loading in dataset from {fn}')
+    dataset = h5py.File(fn, 'r').get('input_ids')
+
+    print(f'Loaded packed input_ids of shape {dataset.shape}')
+    # Truncate dataset so it's evenly divisible by grad_accumulation_steps
+    truncate_idx = len(dataset) - len(dataset) % (args["batch_size"] * args["gradient_accumulation_steps"])
+    dataset = dataset[:truncate_idx]
+
+    def collate_fn(batch):
+        input_ids = batch
+        input_ids = torch.LongTensor(np.concatenate(input_ids)).unsqueeze(0)
+        labels = input_ids.clone()  # LM loss (they will be shifted over in model)
+        return {'input_ids': input_ids, 'attention_mask': None, 'labels': labels}
 
     dataset = PreTokenizedDataset(dataset)
-    # # # Create the InstructionDataset
-    # if args["dataset"] == "guanaco":
-    #     dataset = InstructionDataset(dataset, tokenizer, style="guanaco")
-    # elif args["dataset"] == "sql":
-    #     dataset = InstructionDataset(dataset, tokenizer, style="qna")
-    # else: # (w/ alpaca prompt formatting)
-    #     dataset = InstructionDataset(dataset, tokenizer, style="alpaca")
+    dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn)  #, sampler=sampler)
+
+    return dataloader
+
+
+# And to get the dataloader
+def get_hf_dataloader(args:Dict, tokenizer, rank, world_size, split: str = None):
+    """Creates a dataset and appropriate dataloader with distributed sampler."""
+    dataset = load_from_disk(args['dataset'], keep_in_memory=False)
+    if split is not None:
+        assert split in dataset
+        dataset = dataset[split]
+
+    fn = os.path.join(args['dataset'], f'{rank}.hf')
+    print(f'Rank: {rank}/{world_size} - loading in dataset from {fn}')
+    with h5py.File(fn, 'r') as f:
+        dataset = f['input_ids']
+
+    print(f'Loaded packed input_ids of shape {dataset.shape}')
+
+    # Truncate dataset so it's evenly divisible by grad_accumulation_steps
+    truncate_idx = len(dataset) - len(dataset) % (args["batch_size"]*args["gradient_accumulation_steps"])
+    dataset = dataset[:truncate_idx]
+
+    InstructionDataset(dataset, tokenizer, style="medqa")
 
     # Collate function
     def collate_fn(batch):
@@ -327,10 +364,10 @@ def get_dataloader(tokenizer:PreTrainedTokenizerFast, args:Dict, rank, world_siz
         return {'input_ids': input_ids, 'attention_mask': None, 'labels': labels}
 
     # For distributed training, use DistributedSampler
-    sampler = DistributedSampler(dataset, seed=args["seed"])
+    # sampler = DistributedSampler(dataset, seed=args["seed"])
 
     # Use the custom collate function in DataLoader
-    dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn, sampler=sampler)
+    dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn)  #, sampler=sampler)
 
     return dataloader
 
@@ -501,13 +538,22 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     else:
         raise ValueError("Invalid precision")
 
-
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args["model_name"])
     tokenizer.pad_token_id = tokenizer.eos_token_id # TODO check if it exists first
 
     # Set up dataloader
-    dataloader = get_dataloader(tokenizer, args, rank, world_size)
+    print(f'Getting data loader for rank={rank}...')
+
+    if args["mode"] == "pretrain":
+        dataloader = get_sharded_h5_dataloader(args, rank, world_size)
+    elif args["mode"] == "debug":
+        dataloader = get_fake_dataloader()
+    elif args["mode"] == "finetune":
+        dataloader = get_hf_dataloader(args, tokenizer, rank, world_size, split="train")
+        val_dataloader = get_hf_dataloader(args, tokenizer, rank, world_size, split="validation")
+    else:
+        raise Exception("Unrecognized training mode --> ", args["mode"])
 
     # Create model
     attn_impl = "sdpa" # torch 2.2 sdpa uses flash attn 2
@@ -568,7 +614,6 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
 
     print("Model created", rank, torch.cuda.memory_allocated(rank))
 
-
     # PEFT setup (LoRA and QLoRA)
     if args["train_type"] in ["lora", "qlora"]:
         peft_config = LoraConfig(
@@ -609,7 +654,6 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
 
     logger.log({"memory_after_model_creation": torch.cuda.memory_allocated(rank)}, rank)
 
-
     # Wrap model with llama-recipies LoRA policy
     my_auto_wrap_policy = create_default_auto_wrap_policy()
 
@@ -630,7 +674,6 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     )
     print("Wrapped model", rank, torch.cuda.memory_allocated(rank))
     logger.log({"memory_after_model_wrap": torch.cuda.memory_allocated(rank)}, rank)
-
 
     # Synchronize at the start
     dist.barrier()
@@ -698,15 +741,16 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
                 sync_context = nullcontext()
 
             # Start logging memory (first iter) if requested
-            if batch_idx==0 and rank == 0 and epoch == 0 and args['profile_memory']:
-                torch.cuda.memory._record_memory_history()
+            # MEMORY LEAK!!
+            # if batch_idx==0 and rank == 0 and epoch == 0 and args['profile_memory']:
+            #     torch.cuda.memory._record_memory_history()
 
             # Reset peak memory to track that
-            torch.cuda.reset_peak_memory_stats(rank)
+            # torch.cuda.reset_peak_memory_stats(rank)
 
             # Log memory usage
-            if batch_idx == 0 and epoch == 0:
-                logger.log({"memory_before_forward": torch.cuda.memory_allocated(rank)}, rank)
+            # if batch_idx == 0 and epoch == 0:
+            #     logger.log({"memory_before_forward": torch.cuda.memory_allocated(rank)}, rank)
 
             # Forward pass
             with sync_context:
@@ -721,9 +765,9 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
                 # Scale loss for gradient accumulation
                 loss = loss / gradient_accumulation_steps
 
-                # Losg memory usage
-                if batch_idx == 0 and epoch == 0:
-                    logger.log({"memory_after_forward": torch.cuda.memory_allocated(rank)}, rank)
+                # Logs memory usage
+                # if batch_idx == 0 and epoch == 0:
+                #     logger.log({"memory_after_forward": torch.cuda.memory_allocated(rank)}, rank)
 
                 # Backward pass
                 if scale_grads:
@@ -756,24 +800,24 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
                     save_checkpoint(args, model, rank, print_func, steps)
 
             # Log memory usage after backwards
-            if batch_idx == 0 and epoch == 0:
-                logger.log({"memory_after_backward": torch.cuda.memory_allocated(rank)}, rank)
+            # if batch_idx == 0 and epoch == 0:
+            #     logger.log({"memory_after_backward": torch.cuda.memory_allocated(rank)}, rank)
 
             # Print + log peak memory usage for the whole first step of training
-            if batch_idx == 0 and epoch == 0:
-                peak_memory = torch.cuda.max_memory_allocated(rank)
-                if args["verbose"]:
-                    print_func(f"Peak memory usage (training): {peak_memory/1e9:.2f}GB", rank)
-                    if args["log_to"] == 'wandb':
-                        logger.log({"memory_peak": peak_memory}, rank)
+            # if batch_idx == 0 and epoch == 0:
+            #     peak_memory = torch.cuda.max_memory_allocated(rank)
+            #     if args["verbose"]:
+            #         print_func(f"Peak memory usage (training): {peak_memory/1e9:.2f}GB", rank)
+            #         if args["log_to"] == 'wandb':
+            #             logger.log({"memory_peak": peak_memory}, rank)
 
             # Delete the output so more memory frees up before the next forward pass
             output = None
             loss = None
 
             # Stop logging memory (first iter)
-            if batch_idx==0 and rank == 0 and epoch == 0 and args['profile_memory']:
-                torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+            # if batch_idx==0 and rank == 0 and epoch == 0 and args['profile_memory']:
+            #     torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
 
             # Log loss every gradient update steps
             if accumulate_grads:
@@ -786,7 +830,7 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
                         log_lr = args["lr"]
                     update_progress_bar(progress_bar, epoch, log_loss, log_lr, rank)
                     if args["log_to"] == 'wandb':
-                        logger.log({"loss": log_loss, "lr": log_lr}, rank)
+                        logger.log({"train/loss": log_loss, "lr": log_lr}, rank)
                 ddp_loss = torch.zeros(2).to(rank)
 
     # Synchronize at the end and record time
@@ -814,75 +858,78 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     dist.destroy_process_group()
 
 
-# Entry point, using fastcore's call_parse to parse args from command line and then calling fsdp_main
-@call_parse()
-def main(
-    world_size: int = -1, # Number of GPUs to use. -1 = all available GPUs.
-    train_type: Param("", choices=["full", "lora", "qlora", "custom_qlora"]) = "qlora", # "full", "lora", "qlora", or "custom_qlora"
-    batch_size: int = 1, # Batch size per GPU for training
-    context_length: int = 512, # Max length of input sequence (in tokens)
-    gradient_accumulation_steps: int = 1, # How many steps to accumulate gradients over (increases effective batch size)
-    num_epochs: int = 1, # How many epochs of training to do
-    dataset: Param("") = "alpaca_sample", # alpaca, alpaca_sample (for a 128-sample test) or "dummy" for 16 long dummy samples
-    use_ddp: bool_arg = False, # Whether to use DDP instead of FSDP with full sharding
-    use_gradient_checkpointing: bool_arg = True, # Whether to use fsdp's activation checkpointing
-    use_cpu_offload: bool_arg = False, # Whether to use fsdp's cpu offload
-    low_memory: bool_arg = True, # Load one copy of the model into CPU memory before sharding with FSDP. For QLoRA, quantizes each layer individually on GPU before placing on CPU.
-    no_sync: bool_arg = False, # Prevent gradient sync until update step. Likely uses more memory. Required for `use_cpu_offload` and `gradient_accumulation_steps > 1`
-    precision: Param("", choices=["fp32", "bf16", "fp16_autocast", "bf16_autocast", "bf16_buffers_autocast"]) = "bf16", # Training precision. autocast precisions use mixed precision
-    model_name: str = "meta-llama/Llama-2-7b-hf", # Which model to train - e.g. "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    save_model: bool_arg = False, # Whether to save the resulting model
-    save_steps: int=1000, # How frequently to save the model
-    experiment: str = 'default',
-    output_dir: str = "output", # Output directory to save the final model to
-    lora_rank: int = 64, # LoRA rank for lora/qlora
-    lora_alpha: int = 16, # LoRA alpha for lora/qlora
-    lora_dropout: float = 0.1, # LoRA dropout for lora/qlora
-    lora_target_modules: Param("", choices=["all", "default"]) = "all", # If 'default', uses peft defaults. Use 'all' for our best guess for mistral+llama
-    verbose: bool_arg = False, # Whether to print extra info for debugging
-    lr: float = 1e-5, # Learning rate
-    apply_gradient_clipping: bool_arg = False, # Whether to apply gradient clipping
-    grad_norm: float = 0.3, # Gradient norm clipping
-    wd: float = 0.1, # Weight decay
-    profile_memory: bool_arg = False, # Whether to profile memory usage for the first batch
-    optimizer: Param("", choices=["adamw", "adam", "sgd", "adadelta"]) = "adamw", # Optimizer
-    lr_scheduler: Param("", choices=["constant", "linear", "cosine"]) = "constant", # Learning Rate Scheduler. linear and cosine warm up for 10% of training steps.
-    log_to: Param("", choices=["tqdm", "wandb", "stdout"]) = "tqdm", # Where to log output
-    master_addr: str = "localhost", # For distributed training
-    master_port: str = "12355", # For distributed training, must be the same for all processes
-    seed: int = 42, # Random seed
-    project_name: str = "fsdp_qlora", # For wandb logging
-    entity: str = None, # For wandb logging
-):
+if __name__ == '__main__':
+    # Entry point, using fastcore's call_parse to parse args from command line and then calling fsdp_main
+    @call_parse()
+    def main(
+        mode: Param("", choices=["pretrain", "finetune", "debug"]) = "pretrain",
+        world_size: int = -1, # Number of GPUs to use. -1 = all available GPUs.
+        train_type: Param("", choices=["full", "lora", "qlora", "custom_qlora"]) = "qlora", # "full", "lora", "qlora", or "custom_qlora"
+        batch_size: int = 1, # Batch size per GPU for training
+        context_length: int = 512, # Max length of input sequence (in tokens)
+        gradient_accumulation_steps: int = 1, # How many steps to accumulate gradients over (increases effective batch size)
+        num_epochs: int = 1, # How many epochs of training to do
+        dataset: Param("") = "alpaca_sample", # alpaca, alpaca_sample (for a 128-sample test) or "dummy" for 16 long dummy samples
+        use_ddp: bool_arg = False, # Whether to use DDP instead of FSDP with full sharding
+        use_gradient_checkpointing: bool_arg = True, # Whether to use fsdp's activation checkpointing
+        use_cpu_offload: bool_arg = False, # Whether to use fsdp's cpu offload
+        low_memory: bool_arg = True, # Load one copy of the model into CPU memory before sharding with FSDP. For QLoRA, quantizes each layer individually on GPU before placing on CPU.
+        no_sync: bool_arg = False, # Prevent gradient sync until update step. Likely uses more memory. Required for `use_cpu_offload` and `gradient_accumulation_steps > 1`
+        precision: Param("", choices=["fp32", "bf16", "fp16_autocast", "bf16_autocast", "bf16_buffers_autocast"]) = "bf16", # Training precision. autocast precisions use mixed precision
+        model_name: str = "meta-llama/Llama-2-7b-hf", # Which model to train - e.g. "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        save_model: bool_arg = False, # Whether to save the resulting model
+        save_steps: int=1000, # How frequently to save the model
+        experiment: str = 'default',
+        output_dir: str = "output", # Output directory to save the final model to
+        lora_rank: int = 64, # LoRA rank for lora/qlora
+        lora_alpha: int = 16, # LoRA alpha for lora/qlora
+        lora_dropout: float = 0.1, # LoRA dropout for lora/qlora
+        lora_target_modules: Param("", choices=["all", "default"]) = "all", # If 'default', uses peft defaults. Use 'all' for our best guess for mistral+llama
+        verbose: bool_arg = False, # Whether to print extra info for debugging
+        lr: float = 1e-5, # Learning rate
+        apply_gradient_clipping: bool_arg = False, # Whether to apply gradient clipping
+        grad_norm: float = 0.3, # Gradient norm clipping
+        wd: float = 0.1, # Weight decay
+        # profile_memory: bool_arg = False, # Whether to profile memory usage for the first batch
+        optimizer: Param("", choices=["adamw", "adam", "sgd", "adadelta"]) = "adamw", # Optimizer
+        lr_scheduler: Param("", choices=["constant", "linear", "cosine"]) = "constant", # Learning Rate Scheduler. linear and cosine warm up for 10% of training steps.
+        log_to: Param("", choices=["tqdm", "wandb", "stdout"]) = "tqdm", # Where to log output
+        master_addr: str = "localhost", # For distributed training
+        master_port: str = "12355", # For distributed training, must be the same for all processes
+        seed: int = 42, # Random seed
+        project_name: str = "fsdp_qlora", # For wandb logging
+        entity: str = None, # For wandb logging
+    ):
+        # Set world size
+        if world_size == -1:
+            world_size = torch.cuda.device_count()
+        print(f"World size: {world_size}")
 
-    # Set world size
-    if world_size == -1:
-        world_size = torch.cuda.device_count()
-    print(f"World size: {world_size}")
+        # Get all args which will be passed to fsdp_main
+        args = dict(locals())
+        set_seed(args['seed'])
+        if args['verbose']: print(args)
 
-    # Get all args which will be passed to fsdp_main
-    args = dict(locals())
-    set_seed(args['seed'])
-    if args['verbose']: print(args)
+        # If lora_target_modules is 'all', set sensible defaults for llama + mistral type modules
+        # See peft.utils.constants -> TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING for the current defaults
+        if lora_target_modules == "all":
+            args["lora_target_modules"] = ["k_proj", "q_proj", "v_proj", "up_proj", "down_proj", "gate_proj"]
+        elif lora_target_modules.lower() == "default":
+            args["lora_target_modules"] = None
 
-    # If lora_target_modules is 'all', set sensible defaults for llama + mistral type modules
-    # See peft.utils.constants -> TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING for the current defaults
-    if lora_target_modules == "all":
-        args["lora_target_modules"] = ["k_proj", "q_proj", "v_proj", "up_proj", "down_proj", "gate_proj"]
-    elif lora_target_modules.lower() == "default":
-        args["lora_target_modules"] = None
+        if args["precision"] in ["bf16", "bf16_autocast", "bf16_buffers_autocast"] and not torch.cuda.is_bf16_supported():
+            raise ValueError('Current device does not support bfloat16')
 
-    if args["precision"] in ["bf16", "bf16_autocast", "bf16_buffers_autocast"] and not torch.cuda.is_bf16_supported():
-        raise ValueError('Current device does not support bfloat16')
+        # Set no_sync if using cpu_offload and gradient accumulation. Turn off if not using gradient accumulation
+        if args["use_cpu_offload"] and args["gradient_accumulation_steps"] > 1:
+            args["no_sync"] = True
+        elif args["no_sync"] and args["gradient_accumulation_steps"] == 1:
+            args["no_sync"] = False
 
-    # Set no_sync if using cpu_offload and gradient accumulation. Turn off if not using gradient accumulation
-    if args["use_cpu_offload"] and args["gradient_accumulation_steps"] > 1:
-        args["no_sync"] = True
-    elif args["no_sync"] and args["gradient_accumulation_steps"] == 1:
-        args["no_sync"] = False
-
-    # Run
-    mp.spawn(fsdp_main,
-        args=(world_size, args),
-        nprocs=world_size,
-        join=True)
+        # Run
+        mp.spawn(
+            fsdp_main,
+            args=(world_size, args),
+            nprocs=world_size,
+            join=True
+        )
