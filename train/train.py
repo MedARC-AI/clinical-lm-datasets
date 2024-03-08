@@ -347,8 +347,17 @@ def get_fake_dataloader():
 
 def get_sharded_h5_dataloader(args:Dict, rank, world_size):
     fn = os.path.join(args['dataset'], f'{rank}.h5')
-    print(f'Rank: {rank}/{world_size} - loading in dataset from {fn}')
-    dataset = h5py.File(fn, 'r').get('input_ids')
+
+    if os.path.exists(fn):
+        print(f'Rank: {rank}/{world_size} - loading in dataset from {fn}')
+        dataset = h5py.File(fn, 'r').get('input_ids')
+        pre_sharded = True
+    else:  # We've switched to memmap
+        print('Looks like weve got ourselves the new memmap file format...')
+        config = args['dataset'].replace('/weka/home-griffin/clinical_pile/v1/tokenized/dataset_hf_', '').strip()
+        new_fn = f'/weka/home-griffin/clinical_pile/v1/packed/{config}.memmap'
+        dataset = np.memmap(new_fn, dtype=np.int32, mode='r').reshape((-1, args["context_length"]))
+        pre_sharded = False
 
     print(f'Loaded packed input_ids of shape {dataset.shape}')
     # Truncate dataset so it's evenly divisible by grad_accumulation_steps
@@ -362,7 +371,11 @@ def get_sharded_h5_dataloader(args:Dict, rank, world_size):
         return {'input_ids': input_ids, 'attention_mask': None, 'labels': labels}
 
     dataset = PreTokenizedDataset(dataset)
-    dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn)  #, sampler=sampler)
+    if pre_sharded:
+        dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn)  #, sampler=sampler)
+    else:
+        sampler = DistributedSampler(dataset, seed=args["seed"])
+        dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn, sampler=sampler)
 
     return dataloader
 
@@ -370,11 +383,6 @@ def get_sharded_h5_dataloader(args:Dict, rank, world_size):
 # And to get the dataloader
 def get_hf_dataloader(args:Dict, split_data, tokenizer, rank, world_size, split: str = None):
     """Creates a dataset and appropriate dataloader with distributed sampler."""
-    # dataset = load_from_disk(args['dataset'])
-    # if split is not None:
-    #     assert split in dataset
-    #     dataset = dataset[split]
-
     bs = args["batch_size"] if split == 'train' else args["eval_batch_size"]
 
     # Truncate dataset so it's evenly divisible by grad_accumulation_steps
@@ -484,6 +492,9 @@ def save_checkpoint(args, model, rank, print_func, steps):
             print_func(f"Saving model to {out_fn}")
             save_file(cpu_state_dict, out_fn)
             print_func(f"Done on {rank}")
+
+            return out_fn
+        return None
 
 # Wrap the model (LoRA policy from llama-recipes):
 # This checks for lora layers (has weight and requires_grad)
@@ -822,6 +833,9 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     init_start_event.record()
     log_loss, log_lr = 0.0, -1
     steps = 0
+
+    ckpt_files = []
+
     for epoch in range(args['num_epochs']):
         update_progress_bar(progress_bar, epoch, log_loss, log_lr, rank)
         model.train()
@@ -912,7 +926,14 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
 
                             print(f"Resuming training from step #{steps}...")
                         model.train()
-                    save_checkpoint(args, model, rank, print_func, steps)
+                    ckpt_fn = save_checkpoint(args, model, rank, print_func, steps)
+
+                    if rank == 0:
+                        ckpt_files.append(ckpt_fn)
+                        if len(ckpt_files) > args['save_limit']:
+                            print(f'Removing {ckpt_files[0]}')
+                            os.remove(ckpt_files[0])
+                            ckpt_files = ckpt_files[1:]
 
             # Log memory usage after backwards
             # if batch_idx == 0 and epoch == 0:
@@ -966,7 +987,12 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
 
     # Save modelf - ref: https://github.com/pytorch/pytorch/issues/98823
     if args["save_model"]:
-        save_checkpoint(args, model, rank, print_func, steps)
+        ckpt_fn = save_checkpoint(args, model, rank, print_func, steps)
+        if rank == 0:
+            ckpt_files.append(ckpt_fn)
+            print('The following checkpoints have been saved!\n')
+            print('\n'.join(ckpt_files))
+
     dist.barrier()  # Stop other processes ending while model saving - probably not needed?
 
     # Clean up
@@ -994,6 +1020,7 @@ if __name__ == '__main__':
         model_name: str = "meta-llama/Llama-2-7b-hf", # Which model to train - e.g. "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         save_model: bool_arg = False, # Whether to save the resulting model
         save_steps: int=1000, # How frequently to save the model
+        save_limit: int=10,
         max_val_batches: int = 10000,
         experiment: str = 'default',
         output_dir: str = "output", # Output directory to save the final model to

@@ -13,16 +13,16 @@ OUT_DIR="/weka/home-griffin/weights/pretrain/${MODEL}/${EXPERIMENT}"
 DATASET="/weka/home-griffin/clinical_pile/v1/tokenized/dataset_hf_${CONFIG}"
 LR=3e-5
 TARGET_BATCH_SIZE=512
-PER_DEVICE_BS=1
+PER_DEVICE_BS=2
 NUM_GPUS=8
 EFFECTIVE_BATCH_SIZE=$(($PER_DEVICE_BS * $NUM_GPUS))
 GRAD_ACCUM=$(($TARGET_BATCH_SIZE / $EFFECTIVE_BATCH_SIZE))
 CONTEXT_LENGTH=8192
 
-echo "Generating the ablation dataset if it does not exist..."
-source /weka/home-griffin/envs/data/bin/activate
-cd /weka/home-griffin/clinical-lm-datasets/tokenize
-python3 build_dataset.py --reweighting_config $CONFIG
+# echo "Generating the ablation dataset if it does not exist..."
+# source /weka/home-griffin/envs/data/bin/activate
+# cd /weka/home-griffin/clinical-lm-datasets/tokenize
+# python3 build_dataset.py --reweighting_config $CONFIG
 
 cd /weka/home-griffin/clinical-lm-datasets/train
 source /weka/home-griffin/envs/train/bin/activate

@@ -75,7 +75,7 @@ if __name__ == '__main__':
             shard_local_fn = download(s3, key)
 
             # Use HF to load it
-            dataset = load_dataset('parquet', data_files=shard_local_fn, split='train')
+            dataset = load_dataset('parquet', data_files=shard_local_fn, split='train').rename_column('content', 'text')
 
             idxs = np.arange(len(dataset))
             np.random.shuffle(idxs)
@@ -84,7 +84,7 @@ if __name__ == '__main__':
 
             # Computing Number of Tokens / Document
             sample = sample.map(
-                lambda row: {'num_tokens': len(re.split(r'\W+', row['content']))},
+                lambda row: {'num_tokens': len(re.split(r'\W+', row['text']))},
                 num_proc=multiprocess.cpu_count()
             )
 
@@ -97,7 +97,6 @@ if __name__ == '__main__':
                 lambda row, idx: {
                     'id': row['max_stars_repo_name'] + '-shard=' + str(shard) + '-idx=' + str(idx),
                     'shard': shard,
-                    'text': row['content'],
             },
                 num_proc=multiprocess.cpu_count(),
                 with_indices=True

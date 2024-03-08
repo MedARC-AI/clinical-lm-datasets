@@ -4,9 +4,11 @@ import argparse
 import json
 import h5py
 import numpy as np
-from datasets import load_dataset, load_from_disk
+from datasets import load_from_disk
 from gritlm import GritLM
 import pandas as pd
+import numpy as np
+from tqdm import tqdm
 
 
 def gritlm_instruction(instruction):
@@ -23,19 +25,16 @@ if __name__ == '__main__':
 
     parser.add_argument('--chunk', default=None, type=int)
     parser.add_argument('--num_chunks', default=10, type=int)
-    parser.add_argument('-single_gpu', default=False, action='store_true')
+    parser.add_argument('--num_shards', default=1000, type=int)
 
-    parser.add_argument('--save_dir', default='/weka/home-griffin/clinical_pile/v1/embed', type=str)
+    parser.add_argument('--save_dir', default='/weka/home-griffin/clinical_pile/v1/embeddings', type=str)
 
     args = parser.parse_args()
 
-    if args.single_gpu:
-        model = GritLM('GritLM/GritLM-7B', torch_dtype='auto', device_map='auto', mode='embedding')
-    else:
-        model = GritLM('GritLM/GritLM-7B', torch_dtype='auto', device_map='auto', mode='embedding')
+    model = GritLM('GritLM/GritLM-7B', torch_dtype='auto', device_map='auto', mode='embedding')
 
     # dataset = load_dataset(args.hf_path, split='train')
-    dataset = load_from_disk(args.hf_path)
+    dataset = load_from_disk(args.data_path)
     if args.chunk is not None:
         assert args.chunk > 0  # Start at 1 for naming purposes
         all_idxs = np.arange(len(dataset))
@@ -44,26 +43,34 @@ if __name__ == '__main__':
         dataset = dataset.select(chunk_idxs)
         args.save_dir += f'_{args.chunk}-{args.num_chunks}'
 
-    os.makedirs(args.save_dir, exist_ok=True)
+    for shard in tqdm(range(args.num_shards)):
+        print(f'Processing Shard={shard}/{args.num_shards} for Chunk={args.chunk}/{args.num_chunks}')
 
-    ids = dataset['id']
-    texts = dataset['text']
+        shard_dir = os.path.join(args.save_dir, {shard}-{args.num_shards}')
 
-    embeddings = model.encode(
-        texts, instruction=gritlm_instruction('Identify the main topics from a medical document.'),
-        batch_size=args.batch_size,
-        max_length=args.max_length
-    )
+        if os.path.exists(shard_dir):
+            print(f'{shard_dir} exists. Skipping...')
+            continue
+
+        os.makedirs(shard_dir, exist_ok=True)
+
+        shard_hf = dataset.shard(num_shards=args.num_shards, index=shard)
+
+        embeddings = model.encode(
+            shard_hf['text'], instruction=gritlm_instruction('Identify the main topics from a medical document.'),
+            batch_size=args.batch_size,
+            max_length=args.max_length
+        )
+
+        embed_fn = os.path.join(shard_dir, 'embeddings.h5')
+        print(f'Saving {len(embeddings)} embeddings to {embed_fn}.')
+        with h5py.File(embed_fn, 'w') as hf:
+            hf.create_dataset('array', data=embeddings)
+
+        id_dir = os.path.join(shard_dir, 'ids')
+        remove_cols = [x for x in shard_hf.column_names if x not in {'id', 'uuid', 'source'}]
+        print(f'Saving non-text columns of dataset to {id_dir} to match with embeddings.')
+        shard_hf.remove_columns(remove_cols).save_to_disk(id_dir)
 
     with open(os.path.join(args.save_dir, 'dataset_info.json'), 'w') as fd:
-        json.dump({'hf_path': args.hf_path}, fd)
-
-    embed_fn = os.path.join(args.save_dir, 'embeddings.h5')
-    print(f'Saving {len(embeddings)} embeddings to {embed_fn}.')
-    with h5py.File(embed_fn, 'w') as hf:
-        hf.create_dataset('array', data=embeddings)
-
-    meta_dir = os.path.join(args.save_dir, 'dataset_copy_hf')
-    dataset = dataset.remove_columns(['text'])
-    print(f'Saving non-text columns of dataset to {meta_dir} to match with embeddings.')
-    dataset.save_to_disk(meta_dir)
+        json.dump({'data_path': args.data_path}, fd)

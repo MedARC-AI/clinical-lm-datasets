@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --account overtopmedarc
+#SBATCH --account topmedarc
 #SBATCH --job-name=embed
 #SBATCH --partition=a80
 #SBATCh --mem=800gb
 #SBATCH --gpus=8
 #SBATCH --nodes=1
 #SBATCH --ntasks=8
-#SBATCH --exclusive
+#SBATCH --requeue
 
 # Define the # of chunks (must line up with the above)
 NUM_CHUNKS=8
@@ -21,7 +21,7 @@ cd clinical-lm-datasets
 # Iterate over the range using a for loop
 for ((i=1; i<=$NUM_CHUNKS; i++)); do
     echo "Starting Chunk $i of $NUM_CHUNKS"
-    srun --gpus=1 --ntasks=1 --exclusive --mem=50gb python3 embed/main.py --batch_size 8 --chunk $i --num_chunks $NUM_CHUNKS &
+    srun --gpus=1 --ntasks=1 --mem=100gb python3 embed/main.py --batch_size 1 --chunk $i --num_chunks $NUM_CHUNKS &
 done
 
 wait
