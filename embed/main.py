@@ -4,7 +4,7 @@ import argparse
 import json
 import h5py
 import numpy as np
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from gritlm import GritLM
 import pandas as pd
 
@@ -16,7 +16,7 @@ def gritlm_instruction(instruction):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Add embeddings to each document in clinical pile')
 
-    parser.add_argument('--hf_path', default='medarc/clinical_pile_v1_minhash_deduped')
+    parser.add_argument('--data_path', default='/weka/home-griffin/clinical_pile/v1/dataset_hf_clean')
     
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--max_length', default=2048, type=int)
@@ -34,7 +34,8 @@ if __name__ == '__main__':
     else:
         model = GritLM('GritLM/GritLM-7B', torch_dtype='auto', device_map='auto', mode='embedding')
 
-    dataset = load_dataset(args.hf_path, split='train')
+    # dataset = load_dataset(args.hf_path, split='train')
+    dataset = load_from_disk(args.hf_path)
     if args.chunk is not None:
         assert args.chunk > 0  # Start at 1 for naming purposes
         all_idxs = np.arange(len(dataset))

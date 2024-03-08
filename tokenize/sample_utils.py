@@ -56,7 +56,7 @@ def sample_dataset(dataset, reweighting_config, target_num_tokens):
     dataset = dataset.select(keep_idxs)
 
     print('Converting to Pandas DataFrame to record mixtures with groupby...')
-    source_stats = dataset.remove_columns(['id', 'uuid', 'text']).to_pandas().groupby('source')
+    source_stats = dataset.remove_columns(['id', 'uuid', 'input_ids']).to_pandas().groupby('source')
     stats = []
     for source, df in source_stats:
         stats.append({

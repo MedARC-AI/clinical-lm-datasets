@@ -15,10 +15,12 @@ Not all combinations of arguments will work. See the accompanying blog post for 
 # General
 import torch, os, gc, time, safetensors, copy, math, types
 import functools
+import string
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 from transformers.optimization import get_linear_schedule_with_warmup, get_constant_schedule
 import bitsandbytes as bnb
+from torch.nn.utils.rnn import pad_sequence
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from contextlib import nullcontext
@@ -226,6 +228,47 @@ class PreTokenizedDataset(Dataset):
 
     def __getitem__(self, index):
         return self.dataset[index]
+    
+
+class QAEValDataset(Dataset):
+    def __init__(self, dataset, tokenizer):
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        ex = self.dataset[index]
+        prompt = ex['prompt']
+        
+        input_ids = torch.tensor(self.tokenizer.encode(prompt), dtype=torch.int64)
+        
+        completion = ex['completion']
+        num_options = ex['num_options']
+
+        letter_options = list(string.ascii_uppercase[:num_options])
+        assert completion in letter_options
+        label_ids = self.tokenizer.convert_tokens_to_ids(letter_options)
+        ground_truth = self.tokenizer.convert_tokens_to_ids([completion])[0]
+        assert ground_truth in label_ids
+        ground_truth_idx = label_ids.index(ground_truth)
+
+        # IMPORTANT
+        # Labels don't hold ground truth sequence
+        # Instead the hold information for evaluation
+        # Position 0: Index into input_ids for which to extract the "next token / answer logits"
+        # Position 1: The ground truth answer index. This will be 1 if answer=A, 2 if B, etc.
+        # Position 2-...: The vocabulary indices of the letter options
+        labels = [len(input_ids) - 1, ground_truth_idx] + label_ids
+        labels = torch.tensor(labels, dtype=torch.int64)
+
+        return {
+            'input_ids': input_ids,
+            'labels': labels,
+            'meta': ex['source']
+        }
+
 
 # Dataset class
 class InstructionDataset(Dataset):
@@ -243,7 +286,7 @@ class InstructionDataset(Dataset):
             ex = self.dataset[index]
             prompt = ex['prompt']
             example = prompt + ex['completion']
-        if self.style == "guanaco":
+        elif self.style == "guanaco":
             prompt = self.dataset[index]["text"].split("### Assistant: ")[0]
             example = self.dataset[index]["text"]
         elif self.style == "qna":
@@ -287,8 +330,6 @@ def get_fake_dataloader():
         input_ids = torch.LongTensor(np.concatenate(input_ids)).unsqueeze(0)
         labels = input_ids.clone()  # LM loss (they will be shifted over in model)
         return {'input_ids': input_ids, 'attention_mask': None, 'labels': labels}
-
-    import json
     
     class PreTokenizedDataset(Dataset):
         def __init__(self):
@@ -298,14 +339,10 @@ def get_fake_dataloader():
             return 51200
 
         def __getitem__(self, index):
-            return np.array(np.zeros(shape=(8192, )))
-            # with open(r'/weka/home-griffin/clinical_pile/v1/tokenized/dummy_input_ids.json', 'r') as fd:
-            #     return np.array(json.load(fd)['input_ids'])
+            return np.array(np.zeros(shape=(8, )))
 
     dataset = PreTokenizedDataset()
-    dataloader = DataLoader(dataset, batch_size=1, collate_fn=collate_fn)  #, sampler=sampler)
-
-    return dataloader
+    return DataLoader(dataset, batch_size=1, collate_fn=collate_fn)
 
 
 def get_sharded_h5_dataloader(args:Dict, rank, world_size):
@@ -331,45 +368,59 @@ def get_sharded_h5_dataloader(args:Dict, rank, world_size):
 
 
 # And to get the dataloader
-def get_hf_dataloader(args:Dict, tokenizer, rank, world_size, split: str = None):
+def get_hf_dataloader(args:Dict, split_data, tokenizer, rank, world_size, split: str = None):
     """Creates a dataset and appropriate dataloader with distributed sampler."""
-    dataset = load_from_disk(args['dataset'], keep_in_memory=False)
-    if split is not None:
-        assert split in dataset
-        dataset = dataset[split]
+    # dataset = load_from_disk(args['dataset'])
+    # if split is not None:
+    #     assert split in dataset
+    #     dataset = dataset[split]
 
-    fn = os.path.join(args['dataset'], f'{rank}.hf')
-    print(f'Rank: {rank}/{world_size} - loading in dataset from {fn}')
-    with h5py.File(fn, 'r') as f:
-        dataset = f['input_ids']
-
-    print(f'Loaded packed input_ids of shape {dataset.shape}')
+    bs = args["batch_size"] if split == 'train' else args["eval_batch_size"]
 
     # Truncate dataset so it's evenly divisible by grad_accumulation_steps
-    truncate_idx = len(dataset) - len(dataset) % (args["batch_size"]*args["gradient_accumulation_steps"])
-    dataset = dataset[:truncate_idx]
+    split_data = split_data.select(range(0, len(split_data)-len(split_data)%(bs*args["gradient_accumulation_steps"])))
 
-    InstructionDataset(dataset, tokenizer, style="medqa")
+    print(f'Loaded {len(split_data)} {split} examples onto {rank}.')
+
+    sources = None
+    if 'source' in split_data.features:
+        sources = list(sorted(list(set(split_data['source']))))
+
+    if split == 'train':
+        split_data = InstructionDataset(split_data, tokenizer, style="medqa")
+    elif split == 'validation':
+        split_data = QAEValDataset(split_data, tokenizer)
+    else:
+        raise Exception(f'Unrecognized split --> {split}')
 
     # Collate function
-    def collate_fn(batch):
+    def collate_fn(batch, with_attention_mask=False):
         # To list of tensors
-        input_ids = batch
-        input_ids = torch.LongTensor(input_ids)
-        labels = input_ids.clone()  # LM loss (they will be shifted over in model)
+        input_ids = [torch.tensor(item['input_ids']) for item in batch]
+        labels = [torch.tensor(item['labels']) for item in batch]
         # Pad + truncate
-        # input_ids = pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id)[:, :args["context_length"]]
-        # labels = pad_sequence(labels, batch_first=True, padding_value=-100)[:, :args["context_length"]]
+        input_ids = pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id)[:, :args["context_length"]]
+        if with_attention_mask:
+            attention_masks = [torch.tensor(item['attention_mask']) for item in batch]
+            attention_masks = pad_sequence(attention_masks, batch_first=True, padding_value=0)[:, :args["context_length"]]
+        else:
+            attention_masks = None
+        labels = pad_sequence(labels, batch_first=True, padding_value=-100)[:, :args["context_length"]]
         # Return dict
-        return {'input_ids': input_ids, 'attention_mask': None, 'labels': labels}
+        collated = {'input_ids': input_ids, 'attention_mask': attention_masks, 'labels': labels}
+
+        if 'meta' in batch[0]:
+            collated['meta'] = [item['meta'] for item in batch]
+
+        return collated
 
     # For distributed training, use DistributedSampler
-    # sampler = DistributedSampler(dataset, seed=args["seed"])
+    sampler = DistributedSampler(split_data, seed=args["seed"])
 
     # Use the custom collate function in DataLoader
-    dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn)  #, sampler=sampler)
+    dataloader = DataLoader(split_data, batch_size=bs, collate_fn=collate_fn, sampler=sampler)
 
-    return dataloader
+    return dataloader, sources
 
 
 # LR scheduler.
@@ -423,7 +474,6 @@ def get_optimizer(model:nn.Module, args:Dict):
     else:
         raise ValueError("Invalid optimizer")
 
-
 def save_checkpoint(args, model, rank, print_func, steps):
     save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
     with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, save_policy):
@@ -433,7 +483,7 @@ def save_checkpoint(args, model, rank, print_func, steps):
             out_fn = os.path.join(args["output_dir"], f"model_state_dict_{steps}.safetensors")
             print_func(f"Saving model to {out_fn}")
             save_file(cpu_state_dict, out_fn)
-            print_func("Done", rank)
+            print_func(f"Done on {rank}")
 
 # Wrap the model (LoRA policy from llama-recipes):
 # This checks for lora layers (has weight and requires_grad)
@@ -496,6 +546,49 @@ class QLORA(nn.Module):
         return result
 
 
+def run_validation(args, model, rank, val_dataloader, autocast):
+    sources = ['avg'] + args['sources']
+    accuracy = torch.zeros(3 * len(sources)).to(rank)
+
+    total = min(args['max_val_batches'], len(val_dataloader))
+    for batch_idx, batch in tqdm(enumerate(val_dataloader), total=total):
+
+        if batch_idx == args["max_val_batches"]:
+            break
+
+        # Forward pass
+        with model.no_sync(), torch.no_grad():
+            with autocast:
+                output = model(batch['input_ids'].to(rank))
+                batch_logits = output.logits
+
+                labels = batch['labels']
+
+                next_token_logits = labels[:, 0]
+                true_answer_idxs = labels[:, 1]
+                choice_idxs = labels[:, 2:]
+
+                for i in range(len(labels)):
+                    data_source = batch['meta'][i]
+                    offset = sources.index(data_source) * 3
+
+                    choice_logits = batch_logits[i, next_token_logits[i], choice_idxs[i]]
+                    answer_probs = torch.softmax(choice_logits, dim=0)
+                    pred_answer_idx = int(torch.argmax(answer_probs))
+
+                    true_prob = float(answer_probs[true_answer_idxs[i]])
+                    accuracy[2] += true_prob
+                    accuracy[offset + 2] += true_prob
+
+                    accuracy[0] += 1
+                    accuracy[offset + 0] += 1
+                    if pred_answer_idx == true_answer_idxs[i]:
+                        accuracy[1] += 1
+                        accuracy[1 + offset] += 1
+
+    return accuracy, sources
+
+
 # Main function, run on each process
 def fsdp_main(rank:int, world_size:int, args:Dict):
     print_func = tqdm.write if args["log_to"] == 'tqdm' else print
@@ -544,16 +637,21 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
 
     # Set up dataloader
     print(f'Getting data loader for rank={rank}...')
-
-    if args["mode"] == "pretrain":
+    val_dataloader = None
+    if args["train_mode"] == "pretrain":
         dataloader = get_sharded_h5_dataloader(args, rank, world_size)
-    elif args["mode"] == "debug":
+    elif args["train_mode"] == "debug":
         dataloader = get_fake_dataloader()
-    elif args["mode"] == "finetune":
-        dataloader = get_hf_dataloader(args, tokenizer, rank, world_size, split="train")
-        val_dataloader = get_hf_dataloader(args, tokenizer, rank, world_size, split="validation")
+    elif args["train_mode"] == "finetune":
+        data_dir = args['dataset']
+        print(f'Loading data from {data_dir} onto {rank}...')
+        dataset = load_from_disk(data_dir)
+        dataloader, _ = get_hf_dataloader(args, dataset['train'], tokenizer, rank, world_size, split="train")
+        val_dataloader, sources = get_hf_dataloader(args, dataset['validation'], tokenizer, rank, world_size, split="validation")
+        print(sources)
+        args["sources"] = sources
     else:
-        raise Exception("Unrecognized training mode --> ", args["mode"])
+        raise Exception("Unrecognized training mode --> ", args["train_mode"])
 
     # Create model
     attn_impl = "sdpa" # torch 2.2 sdpa uses flash attn 2
@@ -797,6 +895,23 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
 
                 steps += 1
                 if args["save_model"] and steps % args["save_steps"] == 0:
+                    if val_dataloader is not None:
+                        model.eval()
+                        if rank == 0:
+                            print(f"Starting validation run @ step #{steps}...")
+                        val_metrics, keys = run_validation(args, model, rank, val_dataloader, autocast)
+
+                        dist.all_reduce(val_metrics, op=dist.ReduceOp.SUM)
+                        if rank == 0:
+                            if args["log_to"] == 'wandb':
+                                for kidx, k in enumerate(keys):
+                                    offset = kidx * 3
+                                    denom = val_metrics[offset + 0]
+                                    logger.log({f"validation/{k}_accuracy": val_metrics[offset + 1] / denom}, rank)
+                                    logger.log({f"validation/{k}_answer_likelihood": val_metrics[offset + 2] / denom}, rank)
+
+                            print(f"Resuming training from step #{steps}...")
+                        model.train()
                     save_checkpoint(args, model, rank, print_func, steps)
 
             # Log memory usage after backwards
@@ -852,7 +967,7 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     # Save modelf - ref: https://github.com/pytorch/pytorch/issues/98823
     if args["save_model"]:
         save_checkpoint(args, model, rank, print_func, steps)
-    dist.barrier() # Stop other processes ending while model saving - probably not needed?
+    dist.barrier()  # Stop other processes ending while model saving - probably not needed?
 
     # Clean up
     dist.destroy_process_group()
@@ -862,10 +977,10 @@ if __name__ == '__main__':
     # Entry point, using fastcore's call_parse to parse args from command line and then calling fsdp_main
     @call_parse()
     def main(
-        mode: Param("", choices=["pretrain", "finetune", "debug"]) = "pretrain",
         world_size: int = -1, # Number of GPUs to use. -1 = all available GPUs.
         train_type: Param("", choices=["full", "lora", "qlora", "custom_qlora"]) = "qlora", # "full", "lora", "qlora", or "custom_qlora"
         batch_size: int = 1, # Batch size per GPU for training
+        eval_batch_size: int = 1, # Batch size per GPU for training
         context_length: int = 512, # Max length of input sequence (in tokens)
         gradient_accumulation_steps: int = 1, # How many steps to accumulate gradients over (increases effective batch size)
         num_epochs: int = 1, # How many epochs of training to do
@@ -879,6 +994,7 @@ if __name__ == '__main__':
         model_name: str = "meta-llama/Llama-2-7b-hf", # Which model to train - e.g. "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         save_model: bool_arg = False, # Whether to save the resulting model
         save_steps: int=1000, # How frequently to save the model
+        max_val_batches: int = 10000,
         experiment: str = 'default',
         output_dir: str = "output", # Output directory to save the final model to
         lora_rank: int = 64, # LoRA rank for lora/qlora
@@ -897,6 +1013,7 @@ if __name__ == '__main__':
         master_addr: str = "localhost", # For distributed training
         master_port: str = "12355", # For distributed training, must be the same for all processes
         seed: int = 42, # Random seed
+        train_mode: str = "pretrain",
         project_name: str = "fsdp_qlora", # For wandb logging
         entity: str = None, # For wandb logging
     ):

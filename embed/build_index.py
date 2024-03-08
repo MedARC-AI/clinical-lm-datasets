@@ -52,10 +52,10 @@ if __name__ == '__main__':
     build_index(
         embeddings=embeddings, file_format='npy', index_path=args.index_fn, save_on_disk=True, use_gpu=False,
         min_nearest_neighbors_to_retrieve=10,
-        max_index_memory_usage='100gb',
-        current_memory_available='250gb',
+        max_index_memory_usage='250gb',
+        current_memory_available='500gb',
         max_index_query_time_ms=20,
-        make_direct_map=True  # Allows us to recreate the indices
+        # make_direct_map=True  # Allows us to recreate the indices
     )
 
     with open(args.id_fn, 'w') as fd:

@@ -52,4 +52,4 @@ python3 train.py \
 --save_steps 500 \
 --log_to wandb \
 --lr_scheduler cosine \
---mode pretrain \
+--train_mode pretrain \

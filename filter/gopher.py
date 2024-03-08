@@ -284,11 +284,11 @@ if __name__ == '__main__':
     num_saved = 0
     num_removed = 0
 
-    # dataset = load_dataset('json', data_files=args.pile_path, split='train')
-    # print(dataset.features)
-    # print(len(dataset))
+    dataset = load_dataset('json', data_files=args.pile_path, split='train')
+    cols = list(dataset.features)
+    print(len(dataset))
 
-    def process(obj):
+    def gopher_filters(obj, rep_filter, quality_filter):
         # line = line.strip()
         # obj = json.loads(line)
 
@@ -299,23 +299,34 @@ if __name__ == '__main__':
             gopher_reason = gopher_removal_reason(obj, rep_filter, quality_filter)
             is_keep = gopher_reason is None
 
-        if is_keep:
-            return {'gopher_reason': None, 'json': obj}
-        else:
-            return {'gopher_reason': gopher_reason, 'json': None}
+        return is_keep
+        # if is_keep:
+        #     return {'gopher_reason': None}  # , 'json': obj}
+        # else:
+        #     return {'gopher_reason': gopher_reason}  # , 'json': None}
 
-    outputs = list(p_uimap(
-        process, load_dataset('json', data_files=args.pile_path, split='train')  # open(args.pile_path, 'r')
-    ))
+    # outputs = list(p_uimap(
+    #     process, load_dataset('json', data_files=args.pile_path, split='train')  # open(args.pile_path, 'r')
+    # ))
 
-    with open(args.out_fn, 'w') as out_fd:
-        for out in tqdm(outputs):
-            if out['gopher_reason'] is None:
-                num_saved += 1
-                out_fd.write(out['json'] + '\n')
-            else:
-                num_removed += 1
-                removal_reasons[out['gopher_reason']] += 1
+    n = len(dataset)
+    dataset = dataset.filter(
+        lambda row: gopher_filters(row, rep_filter, quality_filter), num_proc=multiprocess.cpu_count()
+    )
+
+    filt_n = len(dataset)
+    print(f'{n} -> {filt_n} after running through Gopher rules...')
+
+    dataset.save_to_disk('/weka/home-griffin/clinical_pile/v1/dataset_hf_clean')
+
+    # with open(args.out_fn, 'w') as out_fd:
+    #     for out in tqdm(outputs):
+    #         if out['gopher_reason'] is None:
+    #             num_saved += 1
+    #             out_fd.write(out['json'] + '\n')
+    #         else:
+    #             num_removed += 1
+    #             removal_reasons[out['gopher_reason']] += 1
 
     # with open(args.out_fn, 'w') as out_fd, open(args.pile_path, 'r') as in_fd:
     #     for line in tqdm(in_fd):
@@ -337,13 +348,13 @@ if __name__ == '__main__':
     #             assert gopher_reason is not None
     #             removal_reasons[gopher_reason] += 1
 
-    print(f'Num Original: {num_saved + num_removed}')
-    print(f'Num Saved: {num_saved}')
-    print(f'Num Removed: {num_removed}')
+    # print(f'Num Original: {num_saved + num_removed}')
+    # print(f'Num Saved: {num_saved}')
+    # print(f'Num Removed: {num_removed}')
 
-    print('Removal reasons...')
-    for k, v in removal_reasons.items():
-        print(k + ' -> ' + str(v))
+    # print('Removal reasons...')
+    # for k, v in removal_reasons.items():
+    #     print(k + ' -> ' + str(v))
 
     #     for row in tqdm(data):
 

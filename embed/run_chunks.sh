@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --account overtopmedarc
+#SBATCH --job-name=embed
 #SBATCH --partition=a80
-#SBATCh --mem=400gb
+#SBATCh --mem=800gb
 #SBATCH --gpus=8
 #SBATCH --nodes=1
 #SBATCH --ntasks=8
@@ -9,6 +10,9 @@
 
 # Define the # of chunks (must line up with the above)
 NUM_CHUNKS=8
+
+source /etc/profile.d/modules.sh
+module load cuda/12.1
 
 cd /weka/home-griffin
 source envs/data/bin/activate

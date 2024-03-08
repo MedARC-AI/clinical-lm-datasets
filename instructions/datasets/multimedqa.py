@@ -19,6 +19,7 @@ class MultiMedQAConfigs:
     instruction: str
     input_to_prompt: Callable
     input_to_target: Callable
+    num_options: int
     input_to_id: Callable = input_to_id_default
     train_split: str = 'train'
     validation_split: str = 'validation'
@@ -33,7 +34,8 @@ ALL_CONFIGS = [
         instruction='Answer this Yes/No question using the following PubMed abstract as evidence by writing the letter associated with the correct answer.',
         input_to_prompt=input_to_prompt_pubmedqa,
         input_to_target=input_to_target_pubmedqa_artificial,
-        cot_col='LONG_ANSWER'
+        cot_col='LONG_ANSWER',
+        num_options=2
     ),
     MultiMedQAConfigs(
         name='pubmedqa_labeled',
@@ -41,7 +43,8 @@ ALL_CONFIGS = [
         instruction='Answer this Yes/No/Maybe question using the following PubMed abstract as evidence by writing the letter associated with the correct answer.',
         input_to_prompt=input_to_prompt_pubmedqa,
         input_to_target=input_to_target_pubmedqa,
-        cot_col='LONG_ANSWER'
+        cot_col='LONG_ANSWER',
+        num_options=3
     ),
     MultiMedQAConfigs(
         name='medmcqa',
@@ -49,7 +52,8 @@ ALL_CONFIGS = [
         instruction='Answer this multiple-choice question on {} from the AIIMS & NEET PG entrance medical licensing exams by writing the letter associated with the correct answer.',
         input_to_prompt=input_to_prompt_medmcqa,
         input_to_target=input_to_target_medmcqa,
-        cot_col='exp'
+        cot_col='exp',
+        num_options=4
     ),
     MultiMedQAConfigs(
         name='medqa',
@@ -57,6 +61,7 @@ ALL_CONFIGS = [
         instruction='Answer this multiple-choice question from the United States Medical Licensing Examination (USMLE) by writing the letter associated with the correct answer.',
         input_to_prompt=input_to_prompt_medqa,
         input_to_target=input_to_target_medqa,
+        num_options=4
     ),
 ]
 
@@ -121,7 +126,8 @@ if __name__ == '__main__':
                     'source': config.name,
                     'prompt': prompt,
                     'completion': completion,
-                    'explanation': explanation
+                    'explanation': explanation,
+                    'num_options': config.num_options,
                 }
 
                 outputs[split].append(out_row)

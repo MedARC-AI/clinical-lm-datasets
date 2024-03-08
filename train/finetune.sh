@@ -9,14 +9,16 @@ WANDB_PROJECT="multimedqa"
 SIZE="0.5B"
 MODEL="Qwen/Qwen1.5-${SIZE}"
 OUT_DIR="/weka/home-griffin/weights/finetune/${MODEL}/${EXPERIMENT}"
-DATASET="/weka/home-griffin/clinical_instructions/multimedqa"
+DATASET="/weka/home-griffin/clinical_instructions/multimedqa/dataset_hf"
 LR=3e-5
-TARGET_BATCH_SIZE=8
-PER_DEVICE_BS=1
+TARGET_BATCH_SIZE=32
+PER_DEVICE_BS=4
 NUM_GPUS=8
 EFFECTIVE_BATCH_SIZE=$(($PER_DEVICE_BS * $NUM_GPUS))
 GRAD_ACCUM=$(($TARGET_BATCH_SIZE / $EFFECTIVE_BATCH_SIZE))
 CONTEXT_LENGTH=2048
+EVAL_INTERVAL=500
+MAX_VAL_BATCHES=1024
 
 cd /weka/home-griffin/clinical-lm-datasets/train
 source /weka/home-griffin/envs/train/bin/activate
@@ -34,6 +36,7 @@ python3 train.py \
 --experiment $EXPERIMENT \
 --gradient_accumulation_steps $GRAD_ACCUM \
 --batch_size $PER_DEVICE_BS \
+--eval_batch_size 8 \
 --context_length $CONTEXT_LENGTH \
 --num_epochs 5 \
 --train_type full \
@@ -42,8 +45,9 @@ python3 train.py \
 --dataset $DATASET \
 --verbose true \
 --lr $LR \
+--save_steps $EVAL_INTERVAL \
 --save_model true \
---save_steps 100 \
---log_to wandb \
+--max_val_batches $MAX_VAL_BATCHES \
 --lr_scheduler cosine \
---mode finetune \
+--train_mode finetune \
+--log_to wandb \

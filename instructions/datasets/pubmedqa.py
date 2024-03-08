@@ -14,7 +14,7 @@ def load_artificial():
     dir = '/weka/home-griffin/clinical_instructions/multimedqa/pubmedqa'
     return DatasetDict({
         'train': generate_examples(os.path.join(dir, 'pqaa_train_set.json')),
-        'valdation': generate_examples(os.path.join(dir, 'pqaa_dev_set.json')),
+        'validation': generate_examples(os.path.join(dir, 'pqaa_dev_set.json')),
     })
 
 
@@ -23,7 +23,7 @@ def load_labeled():
     fold_dir = os.path.join(dir, 'pqal_fold0')
     return DatasetDict({
         'train': generate_examples(os.path.join(fold_dir, 'train_set.json')),
-        'valdation': generate_examples(os.path.join(fold_dir, 'dev_set.json')),
+        'validation': generate_examples(os.path.join(fold_dir, 'dev_set.json')),
         'test': generate_examples(os.path.join(dir, 'pqal_test_set.json')),
     })
 
