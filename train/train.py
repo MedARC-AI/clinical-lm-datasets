@@ -393,6 +393,7 @@ def get_hf_dataloader(args:Dict, split_data, tokenizer, rank, world_size, split:
     sources = None
     if 'source' in split_data.features:
         sources = list(sorted(list(set(split_data['source']))))
+        print(sources)
 
     if split == 'train':
         split_data = InstructionDataset(split_data, tokenizer, style="medqa")
@@ -605,8 +606,14 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     print_func = tqdm.write if args["log_to"] == 'tqdm' else print
 
     # Setup and initialize the process group
-    os.environ['MASTER_ADDR'] = args["master_addr"]
-    os.environ['MASTER_PORT'] = args["master_port"]
+    # os.environ['MASTER_ADDR'] = args["master_addr"]
+    # os.environ['MASTER_PORT'] = args["master_port"] 
+
+    print('\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nSLURM PROC / NODE ID')
+    print(os.environ['SLURM_PROCID'])
+    print(os.environ['SLURM_NODEID'])
+    # os.environ['MASTER_PORT'] = os.environ['MASTER_PORT'][:-1] + os.environ['SLURM_NODEID'] 
+    print('END OF SLURM PROC / NODE ID\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n')
 
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
@@ -932,8 +939,13 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
                         ckpt_files.append(ckpt_fn)
                         if len(ckpt_files) > args['save_limit']:
                             print(f'Removing {ckpt_files[0]}')
-                            os.remove(ckpt_files[0])
-                            ckpt_files = ckpt_files[1:]
+                            try:
+                                assert os.path.exists(ckpt_files[0])
+                                os.remove(ckpt_files[0])
+                                ckpt_files = ckpt_files[1:]
+                            except:
+                                print('The below file was attempted to be remove but it doesn\'t exist. Debug this.')
+                                print(ckpt_files[0])
 
             # Log memory usage after backwards
             # if batch_idx == 0 and epoch == 0:

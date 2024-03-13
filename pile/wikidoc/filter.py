@@ -67,14 +67,14 @@ if __name__ == '__main__':
                 continue
             assert 'https://www.wikidoc.org/index.php/' in url
             url = url.replace('https://www.wikidoc.org/index.php/', '')
-            url_clean = remove_non_alpha(url)
+            url_clean = remove_non_alpha_numeric(url)
             if len(url_clean) > 0:
                 wikidoc_guideline_urls.add(url_clean)
 
         prev_n = len(chapter_links)
         print(chapter_links[0])
-        print(remove_non_alpha(chapter_links[0]))
-        chapter_links = [p for p in chapter_links if remove_non_alpha(p.replace('/index.php/', '').strip()) not in wikidoc_guideline_urls]
+        print(remove_non_alpha_numeric(chapter_links[0]))
+        chapter_links = [p for p in chapter_links if remove_non_alpha_numeric(p.replace('/index.php/', '').strip()) not in wikidoc_guideline_urls]
         new_n = len(chapter_links)
         print(f'Removed {prev_n - new_n} chapters which are in Meditron HuggingFace dataset.')
     

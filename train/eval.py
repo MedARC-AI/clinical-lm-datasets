@@ -7,12 +7,17 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from ckpt_to_hf import load_model
 
-from vllm import LLM, SamplingParams
+from glob import glob
+from torch.nn.utils.rnn import pad_sequence
+import numpy as np
+import regex as re
 from tqdm import tqdm
 import string
 
+
 EVAL_DATASETS = {
-    'multimedqa': '/weka/home-griffin/clinical_instructions/multimedqa/dataset_hf'
+    'multimedqa': '/weka/home-griffin/clinical_instructions/multimedqa/dataset_hf',
+    'instruction_pile': '/weka/home-griffin/clinical_instructions/v1/dataset_hf'
 }
 
 
@@ -22,18 +27,31 @@ if __name__ == '__main__':
     parser.add_argument('--model_name', default='Qwen/Qwen1.5-0.5B')
     
     parser.add_argument('--weight_dir', default='/weka/home-griffin/weights/finetune/Qwen/Qwen1.5-0.5B')
-    parser.add_argument('--experiment', default='baseline_0.5B')
+    parser.add_argument('--experiment', default='all_v1')
     parser.add_argument('-eval_pretrained', default=False, action='store_true')
-    parser.add_argument('--ckpt', type=int, default=60000)
+    parser.add_argument('--ckpt', type=int, default=-1)  # -1 means take the last checkpoint
 
-    parser.add_argument('--dataset', default='multimedqa')
+    parser.add_argument('--dataset', default='instruction_pile')
+    parser.add_argument('--batch_size', default=8, type=int)
 
     args = parser.parse_args()
 
-    if args.eval_pretrained:  # Ignore experiment, weight_dir, ckpt information (we are loading from Hub)
+    if args.eval_pretrained:
         model_dir = args.model_name
+    elif args.ckpt == -1:
+        print(f'Searching for latest checkpoint in {args.ckpt}...')
+        pattern = os.path.join(args.weight_dir, args.experiment, '*.safetensors')
+        all_ckpts = list(glob(pattern))
+
+        if len(all_ckpts) == 0:
+            print(f'No checkpoints found in {os.path.join(args.weight_dir, args.experiment)}.')
+        args.ckpt = max([int(re.search('model_state_dict_(\d+)', fn).group(1)) for fn in all_ckpts])
+        print(f'Found checkpoint --> {args.ckpt}')
+        ckpt_name = 'final'
+        model_dir = os.path.join(args.weight_dir, args.experiment, f'hf_{ckpt_name}')
     else:
-        model_dir = os.path.join(args.weight_dir, args.experiment, f'hf_{args.ckpt}')
+        ckpt_name = str(args.ckpt)
+        model_dir = os.path.join(args.weight_dir, args.experiment, f'hf_{ckpt_name}')
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     if not args.eval_pretrained and not os.path.exists(model_dir):
@@ -61,19 +79,16 @@ if __name__ == '__main__':
 
     test = load_from_disk(EVAL_DATASETS[args.dataset])['test']
 
-    accuracy = defaultdict(lambda: [0.0, 0.0, []])
-
     pred_label_dist = {}
+    model_inputs = []
 
-    prev_source = None
-
-    for row in tqdm(test):
+    for idx, row in tqdm(enumerate(test), total=len(test)):
         source, prompt, completion, num_options = row['source'], row['prompt'], row['completion'], row['num_options']
 
         if source not in pred_label_dist:
             pred_label_dist[source] = [0 for _ in range(num_options)]
         
-        input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.int64).to(model.device).unsqueeze(0)
+        input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.int64)
     
         letter_options = list(string.ascii_uppercase[:num_options])
         assert completion in letter_options
@@ -82,27 +97,50 @@ if __name__ == '__main__':
         assert ground_truth in label_ids
         ground_truth_idx = label_ids.index(ground_truth)
 
+        model_inputs.append({
+            'idx': idx,
+            'source': source,
+            'input_ids': input_ids,
+            'last_logit_idx': len(input_ids) - 1, # Pre-Padding where do we extract the data
+            'label_ids': label_ids,
+            'ground_truth_idx': ground_truth_idx,
+        })
+
+    accuracy = defaultdict(lambda: [0.0, 0.0, []])
+    prev_source = None
+
+    batch_starts = list(range(0, len(model_inputs), args.batch_size))
+    for start_idx in tqdm(batch_starts):
+        end_idx = min(start_idx + args.batch_size, len(model_inputs))
+        batch_inputs = model_inputs[start_idx: end_idx]
+
+        input_ids = [x['input_ids'] for x in batch_inputs]
+
+        input_ids = pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id).to(model.device)
         with torch.no_grad():
             output = model(input_ids=input_ids)
         logits = output.logits
 
-        # Last position in sequence
-        pred_probs = torch.softmax(logits[0, -1, label_ids], dim=0)
-        true_likelihood = float(pred_probs[ground_truth_idx])
-        pred_answer_idx = int(torch.argmax(pred_probs))
+        for batch_idx in range(len(logits)):
+            # Last position in sequence
+            mi = batch_inputs[batch_idx]
+            source = mi['source']
+            pred_probs = torch.softmax(logits[batch_idx, mi['last_logit_idx'], mi['label_ids']], dim=0)
+            true_likelihood = float(pred_probs[mi['ground_truth_idx']])
+            pred_answer_idx = int(torch.argmax(pred_probs))
 
-        pred_label_dist[source][pred_answer_idx] += 1
+            pred_label_dist[source][pred_answer_idx] += 1
 
-        if pred_answer_idx == ground_truth_idx:
-            accuracy[source][0] += 1.
-        accuracy[source][1] += 1.
-        accuracy[source][2].append(true_likelihood)
+            if pred_answer_idx == mi['ground_truth_idx']:
+                accuracy[source][0] += 1.
+            accuracy[source][1] += 1.
+            accuracy[source][2].append(true_likelihood)
 
-        if prev_source is not None and prev_source != source:
-            acc = round(accuracy[prev_source][0] / accuracy[prev_source][1] * 100, 2)
-            print(f'{prev_source}: Accuracy={acc}%. Likelihood={round(sum(accuracy[prev_source][2]) / len(accuracy[prev_source][2]), 2)}')
+            if prev_source is not None and prev_source != source:
+                acc = round(accuracy[prev_source][0] / accuracy[prev_source][1] * 100, 2)
+                print(f'{prev_source}: Accuracy={acc}%. Likelihood={round(sum(accuracy[prev_source][2]) / len(accuracy[prev_source][2]), 2)}')
 
-        prev_source = source
+            prev_source = source
 
     # encodings = tokenizer(prompts, padding=True, max_length=4096)
 

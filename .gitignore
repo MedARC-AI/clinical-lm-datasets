@@ -166,3 +166,4 @@ node_modules/
 wandb
 slurm*.out
 memory_snapshot.pickle
+logs/

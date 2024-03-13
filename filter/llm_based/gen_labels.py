@@ -14,33 +14,53 @@ import json
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 
-PROMPT_TEMPLATE = ("""
+MEDICAL_TEMPLATE = ("""
 <<<
 {}
 >>>
 
-The previous paragraph demarcated within <<< and >>> comes from {}.
+Does the previous paragraph demarcated within <<< and >>> contain relevant content for training a biomedical language model (LLM)?
+- Relevant topics in the field of biomedicine include, but are not limited to, medical research findings, clinical procedures and practices, healthcare policies, patient care strategies, pharmaceutical developments, or biotechnological innovations.
 
-Your job is to assess its educational value to a medical student or resident.
-
-A paragraph with high educational value:
-1) Is clearly formatted and non-redundant.
-2) Is information dense with medical concepts.
-3) Contains specific, non-trivial information about these medical concepts.
-4) If about a patient, is necessary to understand the patient's condition or care plan.
-5) Can be any length.
-
-Answer with a number from 1 (no educational value) to 5 (high educational value).
+Answer the question with a number from 1 (Strongly Disagree) to 4 (Strongly Agree):
+1) Strongly Disagree: The paragraph does not contain information pertinent to biomedicine or healthcare.
+2) Disagree: The paragraph mentions biomedical topics only in passing or as minor, uninformative details within a broader context not directly related to biomedicine.
+3) Agree: The paragraph contains elements related to biomedicine but is not primarily focused on the field. This might include general science articles with snippets pertinent to medical applications, medical text with mostly references or boilerplate, or discussions on policy or ethics with implications for healthcare.
+4) Strongly Agree: The paragraph exclusively focuses on biomedical sciences, clinical research or practice, medical technologies, healthcare policies, or patient care strategies.
 
 DO NOT provide an explanation.
 """)
 
 
-ANSWER_PREFIX = 'Answer (1-5): '
+QUALITY_TEMPLATE = ("""
+<<<
+{}
+>>>
+
+Does the previous paragraph demarcated within <<< and >>> contain a highly informative signal for pre-training a Large Language Model (LLM)?
+- An informative datapoint is highly educational and contains useful, specific, and non-trivial knowledge about the world.
+
+Answer the question with a number from 1 (Strongly Disagree) to 4 (Strongly Agree):
+1) Strongly Disagree: The paragraph has little to no educational value.
+2) Disagree: The paragraph has minor educational value.
+3) Agree: The paragraph has moderate educational value.
+4) Strongly Agree: The paragraph has high educational value.
+
+DO NOT provide an explanation.
+""")
 
 
+TEMPLATES = {
+    'quality': QUALITY_TEMPLATE,
+    'topic': MEDICAL_TEMPLATE,
+}
+
+
+ANSWER_PREFIX = 'Answer (1-4): '
+
+# Hardcode just to be extra sure
 LIKERT_IDS = [
-    28740, 28750, 28770, 28781, 28782
+    28740, 28750, 28770, 28781  # , 28782
 ]
 
 MODELS = {
@@ -78,7 +98,7 @@ def gpt_score(prompt, model='gpt-4', temperature=0, max_tokens=2048):
         model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
     )
     likert = int(completion.choices[0].message.content)
-    assert likert in list(range(1, 6))
+    assert likert in list(range(1, 5))
     return likert
 
 
@@ -87,7 +107,7 @@ def mixtral_likert(model, tokenizer, prompt):
         {'role': 'user', 'content': prompt},
     ]
 
-    chat_text = tokenizer.apply_chat_template(messages, tokenize=False) + '\n' + ANSWER_PREFIX
+    chat_text = tokenizer.apply_chat_template(messages, tokenize=False) + '\n\n' + ANSWER_PREFIX
     inputs = tokenizer(chat_text, return_tensors='pt')['input_ids'].to('cuda')
     logits = model(inputs).logits[:, -1, :][0]
     ans_probs = torch.softmax(logits[LIKERT_IDS], dim=0).detach().cpu().numpy()
@@ -101,30 +121,33 @@ if __name__ == '__main__':
 
     parser.add_argument('--model', default='mixtral', choices=list(MODELS.keys()))
     parser.add_argument('--paras_per_doc', default=1)
-    parser.add_argument('--excluded_sources', default='gutenberg_books|code')
-    parser.add_argument('--max_para_toks', default=1024, type=int)
-    parser.add_argument('--data_dir', default='/weka/home-griffin/clinical_pile/v1/dataset_hf_50k_sample', type=str)
+    parser.add_argument('--excluded_sources', default=None)
+    parser.add_argument('--max_para_toks', default=768, type=int)
+    parser.add_argument('--min_para_toks', default=32, type=int)
+    parser.add_argument('--dimension', default='quality', choices=['quality', 'topic'])
+    parser.add_argument('--data_dir', default='/weka/home-griffin/clinical_pile/v1/dataset_hf_1mn_sample', type=str)
     parser.add_argument('-overwrite', default=False, action='store_true')
+
+    parser.add_argument('--chunk', default=None, type=int)
+    parser.add_argument('--num_chunks', default=10, type=int)
 
     args = parser.parse_args()
 
-    out_dir = args.data_dir + '_llm_quality_scores'
+    out_dir = args.data_dir + f'_llm_{args.dimension}_scores'
     os.makedirs(out_dir, exist_ok=True)
 
-    data = load_from_disk('/weka/home-griffin/clinical_pile/v1/dataset_hf_50k_sample')
+    data = load_from_disk(args.data_dir).shuffle()
     N = len(data)
 
-    print('Removing ' + args.excluded_sources)
-    excluded_sources = set(args.excluded_sources.split('|'))
-    data = data.filter(lambda row: row['source'] not in excluded_sources)
-    filt_N = len(data)
+    if args.chunk is not None:
+        data = data.shard(num_shards=args.num_chunks, index=args.chunk, contiguous=True)
 
-    # Shuffle
-    idxs = np.arange(filt_N)
-    np.random.shuffle(idxs)
-    data = data.select(idxs)
-
-    print(f'Left with {filt_N} / {N} examples...')
+    if args.excluded_sources is not None:
+        print('Removing ' + args.excluded_sources)
+        excluded_sources = set(args.excluded_sources.split('|'))
+        data = data.filter(lambda row: row['source'] not in excluded_sources)
+        filt_N = len(data)
+        print(f'Left with {filt_N} / {N} examples...')
 
     if args.model == 'mixtral':
         quantization_config = BitsAndBytesConfig(
@@ -141,7 +164,7 @@ if __name__ == '__main__':
             device_map='auto',
         ).eval()
         tokenizer = AutoTokenizer.from_pretrained(MODELS[args.model])
-        assert tokenizer.decode(LIKERT_IDS) == '12345'
+        assert tokenizer.decode(LIKERT_IDS) == '1234'
     else:
         assert args.model == 'gpt-4'
         client = AzureOpenAI(
@@ -153,7 +176,11 @@ if __name__ == '__main__':
 
     fns_to_load = []
     for idx, row in tqdm(enumerate(data), total=len(data)):
-        out_fn = os.path.join(out_dir, f'{idx}.json')
+        # Make this the pre-sharded index of the data so that we can re-run with different num_chunks and get same results
+        if args.chunk is None:
+            out_fn = os.path.join(out_dir, f'{idx}.json')
+        else:
+            out_fn = os.path.join(out_dir, f'{args.chunk}_{idx}.json')
 
         fns_to_load.append(out_fn)
 
@@ -169,7 +196,17 @@ if __name__ == '__main__':
 
                 for x in arr:
                     curr_para.append(x)
-                    if not x.startswith('#') or '\n' in x:
+
+                    num_curr_toks = len('\n'.join(curr_para).split(' '))
+
+                    if x.startswith('#') and '\n' not in x:  # Likely a header
+                        end_para = False
+                    elif num_curr_toks < args.min_para_toks:
+                        end_para = False
+                    else:
+                        end_para = True
+                    
+                    if end_para:
                         new_arr.append('\n'.join(curr_para))
                         curr_para = []
 
@@ -182,32 +219,34 @@ if __name__ == '__main__':
 
             para_idx = int(np.random.randint(len(paras)))
             para = paras[para_idx]
+            original = para
 
             if len(para.split(' ')) > args.max_para_toks:
                 para = ' '.join(para.split(' ')[:args.max_para_toks])
 
             source = row['source']
 
-            if source == 'mimic':
-                meta = json.loads(row['meta'])
-                assert meta['note_type'] in {'Discharge summary', 'Radiology'}
-                source_doc_desc = meta['note_type']
-                if meta['note_type'] == 'Radiology':
-                    source_doc_desc += ' Report'
-            else:
-                source_doc_desc = SOURCE_DESCRIPTIONS[source]
+            # if source == 'mimic':
+            #     meta = json.loads(row['meta'])
+            #     assert meta['note_type'] in {'Discharge summary', 'Radiology'}
+            #     source_doc_desc = meta['note_type']
+            #     if meta['note_type'] == 'Radiology':
+            #         source_doc_desc += ' Report'
+            # else:
+            #     source_doc_desc = SOURCE_DESCRIPTIONS[source]
 
             # print(para)
             # print('\n')
 
-            prompt = PROMPT_TEMPLATE.format(para, source_doc_desc)
+            prompt = TEMPLATES[args.dimension].format(para)  # , source_doc_desc)
 
             if args.model == 'mixtral':
                 label = mixtral_likert(model, tokenizer, prompt=prompt)
             else:
                 label = gpt_score(args.model, prompt=prompt)
 
-            # print(label)
+            # print(prompt)
+            # print(f'Label: {label}')
             # print('\n\n\n')
             # print('*' * 50)
             # print('\n\n\n')
@@ -217,6 +256,7 @@ if __name__ == '__main__':
                 'id': row['id'],
                 'source': source,
                 'text': para,
+                'original': original, # Pre-truncation to avoid OOM errors (usaully = para)
                 'label': label,
                 'paragraph_idx': para_idx,
             }
@@ -224,10 +264,10 @@ if __name__ == '__main__':
             with open(out_fn, 'w') as fd:
                 json.dump(out_row, fd)
 
-    dataset = Dataset.from_list([
-        json.load(open(fn, 'r')) for fn in fns_to_load
-    ])
+    # dataset = Dataset.from_list([
+    #     json.load(open(fn, 'r')) for fn in fns_to_load
+    # ])
 
-    hf_out = os.path.join(out_dir, 'dataset_hf')
-    print(f'Saving {len(dataset)} quality-labeled paragraphs to {hf_out}')
-    dataset.save_to_disk(hf_out)
+    # hf_out = os.path.join(out_dir, 'dataset_hf')
+    # print(f'Saving {len(dataset)} quality-labeled paragraphs to {hf_out}')
+    # dataset.save_to_disk(hf_out)

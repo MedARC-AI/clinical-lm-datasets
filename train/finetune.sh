@@ -3,14 +3,17 @@
 set -e
 
 EXPERIMENT=$1
+# "/weka/home-griffin/weights/pretrain/Qwen/Qwen1.5-0.5B/${EXPERIMENT}/hf" # $BASE_MODEL
+PRETRAIN_WEIGHTS=$2
 
 WANDB_ENTITY="griffin-adams"
 WANDB_PROJECT="multimedqa"
 SIZE="0.5B"
 BASE_MODEL="Qwen/Qwen1.5-${SIZE}"
-WEIGHTS=/weka/home-griffin/weights/pretrain/Qwen/Qwen1.5-0.5B/all_v1/hf_3447 # $BASE_MODEL
+# Insert Path to pretrained weights.
+# To train from pre-existing model, just point it to HF hub
 OUT_DIR="/weka/home-griffin/weights/finetune/${BASE_MODEL}/${EXPERIMENT}"
-DATASET="/weka/home-griffin/clinical_instructions/multimedqa/dataset_hf"
+DATASET="/weka/home-griffin/clinical_instructions/v1/dataset_hf"
 LR=3e-5
 TARGET_BATCH_SIZE=32
 PER_DEVICE_BS=4
@@ -20,7 +23,7 @@ GRAD_ACCUM=$(($TARGET_BATCH_SIZE / $EFFECTIVE_BATCH_SIZE))
 CONTEXT_LENGTH=2048
 EVAL_INTERVAL=500
 MAX_VAL_BATCHES=1024
-NUM_EPOCHS=5
+NUM_EPOCHS=4
 
 cd /weka/home-griffin/clinical-lm-datasets/train
 source /weka/home-griffin/envs/train/bin/activate
@@ -31,7 +34,7 @@ echo "Gradient Accumulation Steps of ${GRAD_ACCUM}"
 
 echo "Will save model weights to ${OUT_DIR}..."
 python3 train.py \
---model_name $WEIGHTS \
+--model_name $PRETRAIN_WEIGHTS \
 --output_dir $OUT_DIR \
 --project_name $WANDB_PROJECT \
 --entity $WANDB_ENTITY \

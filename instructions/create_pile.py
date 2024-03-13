@@ -30,7 +30,7 @@ SOURCES = [
     Source(name='multimedqa', hf_path='multimedqa/dataset_hf'),
     # Source(name='medalpaca_flashcards', hf_path='medalpaca/flashcards_hf'),
     # Source(name='medalpaca_wikidoc_patient', hf_path='medalpaca/wikidoc_patient_hf'),
-    # Source(name='mednli', hf_path='mednli/dataset_hf'),
+    Source(name='mednli', hf_path='mednli/dataset_hf'),
     # Source(name='chat_doctor', hf_path='ChatDoctor/dataset_hf'),
 ]
 
@@ -38,7 +38,9 @@ SOURCES = [
 MANDATORY_COLS = [
     'id',
     'prompt',
-    'completion'
+    'completion',
+    'num_options',
+    'source'
 ]
 
 
@@ -52,15 +54,15 @@ if __name__ == '__main__':
     parser.add_argument('--output_format', default='hf', choices=['hf', 'jsonl'])
     parser.add_argument('--out_dir', default=None)
 
+    parser.add_argument('--max_train_size', default=100000, type=int)
+
     args = parser.parse_args()
 
-    if args.out_fn is None:
+    if args.out_dir is None:
         if args.output_format == 'jsonl':
             args.out_dir = os.path.join(PILE_DIR, 'jsonl')
         else:
             args.out_dir = os.path.join(PILE_DIR, 'dataset_hf')
-        
-    os.makedirs(exist_ok=True)
 
     new_splits = {'train': [], 'validation': [], 'test': []}
     stats = []
@@ -80,7 +82,7 @@ if __name__ == '__main__':
         for split, split_data in dataset.items():
             n = len(split_data)
             split_data = split_data.filter(lambda row: len(row['id']) > 0)
-            new_n = len(dataset)
+            new_n = len(split_data)
             removed_n = n - new_n
             if removed_n > 0:
                 print('\n\n')
@@ -88,8 +90,6 @@ if __name__ == '__main__':
                 print(f'Removing {removed_n} examples with empty string ID. Fix this for next version.')
                 print('*' * 100)
                 print('\n\n')
-
-            meta_cols = [x for x in split_data.features if x not in MANDATORY_COLS]
 
             assert all([type(x) == str and len(x) > 0 for x in split_data['id']])
             assert all([type(x) == str and len(x) > 0 for x in split_data['prompt']])
@@ -104,18 +104,25 @@ if __name__ == '__main__':
                     num_proc=16
                 )
 
-            if 'source' in meta_cols:
-                print('Existing source will get over-written!')
+            if 'source' in split_data.features:
+                print('Existing column named source. Will not be re-writing it!')
 
-            split_data = split_data.map(lambda _: {'source': source.name})
+            split_data = split_data.map(lambda row: {'source': row['source'] if 'source' in row else source.name})
+
+            if split == 'train' and len(split_data) > args.max_train_size:
+                print(f'We have more training examples than allowed: {len(split_data)} / {args.max_train_size}')
+                print(f'Taking a random sample of {args.max_train_size}')
+                split_data = split_data.shuffle(seed=1992).select(range(args.max_train_size))
 
             stats.append({
                 'source': source.name,
                 'split': split,
                 'path': in_dir,
-                'tokens': sum(dataset['num_tokens']),
-                'examples': len(dataset),
+                'tokens': sum(split_data['num_tokens']),
+                'examples': len(split_data),
             })
+
+            meta_cols = [x for x in split_data.features if x not in MANDATORY_COLS]
 
             if len(meta_cols) > 0:
                 split_data = split_data.map(
@@ -124,8 +131,8 @@ if __name__ == '__main__':
                     num_proc=32
                 )
 
-        new_splits[split].append(split_data)
-    
+            new_splits[split].append(split_data)
+
     new_splits = {k: concatenate_datasets(v) for k, v in new_splits.items()}
     
     if args.output_format == 'hf':
@@ -144,7 +151,7 @@ if __name__ == '__main__':
 
     stats = pd.DataFrame(stats)
     out_fn =  os.path.join(args.out_dir, 'sources.csv')
-    print(f'Saving information on all {len(stats)} sources in Clinical PILE to {out_fn}')
+    print(f'Saving information on all {len(stats)} sources in Clinical instruction PILE to {out_fn}')
     stats.to_csv(out_fn, index=False)
 
-    print(stats[['source', 'examples', 'tokens']].sort_values(by='tokens', ascending=False).head(n=25))
+    print(stats[['source', 'split', 'examples', 'tokens']].sort_values(by='tokens', ascending=False).head(n=25))

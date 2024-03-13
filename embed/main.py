@@ -6,7 +6,6 @@ import h5py
 import numpy as np
 from datasets import load_from_disk
 from gritlm import GritLM
-import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
@@ -25,7 +24,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--chunk', default=None, type=int)
     parser.add_argument('--num_chunks', default=10, type=int)
-    parser.add_argument('--num_shards', default=1000, type=int)
+    parser.add_argument('--num_shards', default=100, type=int)
 
     parser.add_argument('--save_dir', default='/weka/home-griffin/clinical_pile/v1/embeddings', type=str)
 
@@ -41,12 +40,14 @@ if __name__ == '__main__':
         chunk_idxs = np.array_split(all_idxs, args.num_chunks)[args.chunk - 1]
         print(f'Embedding a chunk ({args.chunk} / {args.num_chunks}) of the full dataset from start {chunk_idxs[0]} to end {chunk_idxs[-1]}.')
         dataset = dataset.select(chunk_idxs)
-        args.save_dir += f'_{args.chunk}-{args.num_chunks}'
+        args.save_dir = os.path.join(args.save_dir, f'{args.chunk}-{args.num_chunks}')
+
+    os.makedirs(args.save_dir, exist_ok=True)
 
     for shard in tqdm(range(args.num_shards)):
         print(f'Processing Shard={shard}/{args.num_shards} for Chunk={args.chunk}/{args.num_chunks}')
 
-        shard_dir = os.path.join(args.save_dir, {shard}-{args.num_shards}')
+        shard_dir = os.path.join(args.save_dir, f'{shard}-{args.num_shards}')
 
         if os.path.exists(shard_dir):
             print(f'{shard_dir} exists. Skipping...')

@@ -7,13 +7,14 @@ MEDNLI_DIR = '/weka/home-griffin/clinical_instructions/mednli'
 OUT_DIR = os.path.join(MEDNLI_DIR, 'dataset_hf')
 
 
-INSTRUCTION = 'Does the given medical "hypothesis" logically follow from the "premise"?'
+INSTRUCTION = 'Assess whether or not a medical "hypothesis" logically follows from its "premise".'
+QUESTION = 'Is the hypothesis entailed by the premise?'
 
 
 LABEL_MAP = {
-    'entailment': 'yes',
-    'contradiction': 'no',
-    'neutral': 'maybe',
+    'entailment': 'A',
+    'contradiction': 'B',
+    'neutral': 'C',
 }
 
 CHOICE_STR = 'A) yes\nB) no\nC) maybe'
@@ -31,19 +32,23 @@ if __name__ == '__main__':
 
             for line in lines:
                 obj = json.loads(line)
-                print(obj)
-
-                premise = obj['sentence1']
-                hypothesis = obj['sentence2']
-                
-
-                prompt = f'<<Instruction:>> {INSTRUCTION}\n----\n<<Premise:>> {premise}\n----\n<<Hypothesis:>> {hypothesis}\n----\n<<Choices:>>\n{CHOICE_STR}\n----\n<<Answer:>> '
+                premise = obj['sentence1'].strip()
+                hypothesis = obj['sentence2'].strip()
                 completion = LABEL_MAP[obj['gold_label']]
+
+                pieces = [f'# INSTRUCTION\n{INSTRUCTION}']
+                pieces.append(f'# CONTEXT\nPremise: {premise}\nHypothesis: {hypothesis}')
+                pieces.append(f'# QUESTION\n{QUESTION}')
+                pieces.append(f'# CHOICES\n{CHOICE_STR}')
+                pieces.append('# ANSWER\n')
+
+                prompt = '\n\n'.join(pieces)
 
                 dataset[split].append({
                     'id': obj['pairID'],
                     'prompt': prompt,
-                    'completion': completion
+                    'completion': completion,
+                    'num_options': len(LABEL_MAP),
                 })
     
         dataset[split] = Dataset.from_list(dataset[split])

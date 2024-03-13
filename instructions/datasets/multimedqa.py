@@ -70,13 +70,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Pre-processing MultiMedQA training dataset.')
 
     parser.add_argument('-add_cot', default=False, action='store_true')
+    parser.add_argument('-add_artificial_pubmedqa', default=False, action='store_true')
 
     args = parser.parse_args()
 
+    suffix = '_artificial' if args.add_artificial_pubmedqa else ''
+
     if args.add_cot:
-        out_dir = os.path.join(OUT_DIR, 'dataset_cot_hf')
+        out_dir = os.path.join(OUT_DIR, f'dataset_cot_hf{suffix}')
     else:
-        out_dir = os.path.join(OUT_DIR, 'dataset_hf')
+        out_dir = os.path.join(OUT_DIR, f'dataset_hf{suffix}')
 
     if os.path.exists(out_dir):
         print(f'{out_dir} exists already. Before re-running, run "rm -rf {out_dir}"')
@@ -89,6 +92,9 @@ if __name__ == '__main__':
     }
 
     for config in ALL_CONFIGS:
+        if config.name == 'pubmedqa_artificial' and not args.add_artificial_pubmedqa:
+            print(f'Skipping {config.name}...')
+            continue
         print(f'Processing {config.name}...')
         try:
             dataset = load_from_disk(*config.hf_args)
