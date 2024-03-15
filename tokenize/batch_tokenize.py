@@ -7,17 +7,23 @@ from datasets import load_from_disk
 from transformers import AutoTokenizer
 
 
+TOKENIZERS = {
+    'qwen': 'Qwen/Qwen1.5-0.5B',
+    'llama2': 'meta-llama/Llama-2-7b-hf',
+}
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Re-weight and tokenize dataset")
     parser.add_argument('--num_proc', default=multiprocess.cpu_count() - 16, type=int)
-    parser.add_argument('--tokenizer', type=str, default='Qwen/Qwen1.5-0.5B', help='Tokenizer model to use')
-    parser.add_argument('--dataset', type=str, default='/weka/home-griffin/clinical_pile/v1/dataset_hf', help='Name of the dataset to process')
+    parser.add_argument('--model', type=str, default='qwen', help='Tokenizer model to use', choices=TOKENIZERS.keys())
+    parser.add_argument('--dataset', type=str, default='/weka/home-griffin/clinical_pile/v1/dataset_hf_clean', help='Name of the dataset to process')
 
     args = parser.parse_args()
 
-    out_dir = args.dataset + '_tokenized'
+    out_dir = args.dataset + f'_{args.model}_tokenized'
     
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    tokenizer = AutoTokenizer.from_pretrained(TOKENIZERS[args.model])
 
     def tokenize_function(example):
         return {'input_ids': tokenizer([t + tokenizer.eos_token for t in example['text']])['input_ids']}

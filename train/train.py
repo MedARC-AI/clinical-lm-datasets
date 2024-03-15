@@ -345,19 +345,8 @@ def get_fake_dataloader():
     return DataLoader(dataset, batch_size=1, collate_fn=collate_fn)
 
 
-def get_sharded_h5_dataloader(args:Dict, rank, world_size):
-    fn = os.path.join(args['dataset'], f'{rank}.h5')
-
-    if os.path.exists(fn):
-        print(f'Rank: {rank}/{world_size} - loading in dataset from {fn}')
-        dataset = h5py.File(fn, 'r').get('input_ids')
-        pre_sharded = True
-    else:  # We've switched to memmap
-        print('Looks like weve got ourselves the new memmap file format...')
-        config = args['dataset'].replace('/weka/home-griffin/clinical_pile/v1/tokenized/dataset_hf_', '').strip()
-        new_fn = f'/weka/home-griffin/clinical_pile/v1/packed/{config}.memmap'
-        dataset = np.memmap(new_fn, dtype=np.int32, mode='r').reshape((-1, args["context_length"]))
-        pre_sharded = False
+def get_h5_dataloader(args:Dict, global_rank, world_size):
+    dataset = np.memmap(args['dataset'], dtype=np.int32, mode='r').reshape((-1, args["context_length"]))
 
     print(f'Loaded packed input_ids of shape {dataset.shape}')
     # Truncate dataset so it's evenly divisible by grad_accumulation_steps
@@ -371,24 +360,22 @@ def get_sharded_h5_dataloader(args:Dict, rank, world_size):
         return {'input_ids': input_ids, 'attention_mask': None, 'labels': labels}
 
     dataset = PreTokenizedDataset(dataset)
-    if pre_sharded:
-        dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn)  #, sampler=sampler)
-    else:
-        sampler = DistributedSampler(dataset, seed=args["seed"])
-        dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn, sampler=sampler)
+
+    sampler = DistributedSampler(dataset, seed=args["seed"], rank=global_rank, num_replicas=world_size)
+    dataloader = DataLoader(dataset, batch_size=args["batch_size"], collate_fn=collate_fn, sampler=sampler)
 
     return dataloader
 
 
 # And to get the dataloader
-def get_hf_dataloader(args:Dict, split_data, tokenizer, rank, world_size, split: str = None):
+def get_hf_dataloader(args:Dict, split_data, tokenizer, global_rank, world_size, split: str = None):
     """Creates a dataset and appropriate dataloader with distributed sampler."""
     bs = args["batch_size"] if split == 'train' else args["eval_batch_size"]
 
     # Truncate dataset so it's evenly divisible by grad_accumulation_steps
     split_data = split_data.select(range(0, len(split_data)-len(split_data)%(bs*args["gradient_accumulation_steps"])))
 
-    print(f'Loaded {len(split_data)} {split} examples onto {rank}.')
+    print(f'Loaded {len(split_data)} {split} examples.')
 
     sources = None
     if 'source' in split_data.features:
@@ -424,7 +411,7 @@ def get_hf_dataloader(args:Dict, split_data, tokenizer, rank, world_size, split:
         return collated
 
     # For distributed training, use DistributedSampler
-    sampler = DistributedSampler(split_data, seed=args["seed"])
+    sampler = DistributedSampler(split_data, seed=args["seed"], rank=global_rank, num_replicas=world_size)
 
     # Use the custom collate function in DataLoader
     dataloader = DataLoader(split_data, batch_size=bs, collate_fn=collate_fn, sampler=sampler)
@@ -456,7 +443,8 @@ def get_cosine_one_cycle_scheduler(optimizer:optim.Optimizer, num_warmup_steps:i
 def get_lr_scheduler(optimizer:optim.Optimizer, dataloader:DataLoader, gradient_accumulation_steps:int, args:Dict):
     """Returns linear, cosine, or constant learning rate scheduler"""
     num_training_steps = args['num_epochs'] * len(dataloader) // gradient_accumulation_steps
-    num_warmup_steps = int(num_training_steps * 0.1)
+    # Original FSDP script has 0.1 -->
+    num_warmup_steps = int(num_training_steps * args["warmup_fraction"])
     if args['lr_scheduler'] == "linear":
         lr_scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps)
     elif args['lr_scheduler'] == "cosine":
@@ -602,24 +590,19 @@ def run_validation(args, model, rank, val_dataloader, autocast):
 
 
 # Main function, run on each process
-def fsdp_main(rank:int, world_size:int, args:Dict):
+# def fsdp_main(rank:int, world_size:int, args:Dict):
+def fsdp_main(args, global_rank, local_rank, world_size):
     print_func = tqdm.write if args["log_to"] == 'tqdm' else print
 
     # Setup and initialize the process group
     # os.environ['MASTER_ADDR'] = args["master_addr"]
-    # os.environ['MASTER_PORT'] = args["master_port"] 
+    # os.environ['MASTER_PORT'] = args["master_port"]
 
-    print('\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nSLURM PROC / NODE ID')
-    print(os.environ['SLURM_PROCID'])
-    print(os.environ['SLURM_NODEID'])
-    # os.environ['MASTER_PORT'] = os.environ['MASTER_PORT'][:-1] + os.environ['SLURM_NODEID'] 
-    print('END OF SLURM PROC / NODE ID\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n')
-
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
+    dist.init_process_group("nccl", rank=global_rank, world_size=world_size)
+    torch.cuda.set_device(local_rank)
 
     # Start logging
-    logger = Logger(args, log_to=args["log_to"], experiment=args["experiment"], project_name=args["project_name"], entity=args["entity"], rank=rank)
+    logger = Logger(args, log_to=args["log_to"], experiment=args["experiment"], project_name=args["project_name"], entity=args["entity"], rank=global_rank)
 
     # Timing stuff
     init_start_event = torch.cuda.Event(enable_timing=True)
@@ -653,19 +636,16 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     tokenizer = AutoTokenizer.from_pretrained(args["model_name"])
     tokenizer.pad_token_id = tokenizer.eos_token_id # TODO check if it exists first
 
-    # Set up dataloader
-    print(f'Getting data loader for rank={rank}...')
     val_dataloader = None
     if args["train_mode"] == "pretrain":
-        dataloader = get_sharded_h5_dataloader(args, rank, world_size)
+        dataloader = get_h5_dataloader(args, global_rank, world_size)
     elif args["train_mode"] == "debug":
         dataloader = get_fake_dataloader()
     elif args["train_mode"] == "finetune":
         data_dir = args['dataset']
-        print(f'Loading data from {data_dir} onto {rank}...')
         dataset = load_from_disk(data_dir)
-        dataloader, _ = get_hf_dataloader(args, dataset['train'], tokenizer, rank, world_size, split="train")
-        val_dataloader, sources = get_hf_dataloader(args, dataset['validation'], tokenizer, rank, world_size, split="validation")
+        dataloader, _ = get_hf_dataloader(args, dataset['train'], tokenizer, global_rank, world_size, split="train")
+        val_dataloader, sources = get_hf_dataloader(args, dataset['validation'], tokenizer, global_rank, world_size, split="validation")
         print(sources)
         args["sources"] = sources
     else:
@@ -673,9 +653,9 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
 
     # Create model
     attn_impl = "sdpa" # torch 2.2 sdpa uses flash attn 2
-    print("Creating model", rank)
+    print("Creating model", global_rank, local_rank)
     if args["train_type"] == "full" or args["train_type"] == "lora":
-        if (args["low_memory"] and rank == 0) or (not args["low_memory"]):
+        if (args["low_memory"] and local_rank == 0) or (not args["low_memory"]):
             model = AutoModelForCausalLM.from_pretrained(
                 args["model_name"],
                 use_cache=False,
@@ -683,7 +663,7 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
                 _attn_implementation=attn_impl
             )
             dtype = torch_dtype if args["precision"] == "bf16" else None
-            model.to(dtype=dtype, device="cpu" if args["low_memory"] else rank)
+            model.to(dtype=dtype, device="cpu" if args["low_memory"] else local_rank)
         else:
             cfg = AutoConfig.from_pretrained(args["model_name"])
             cfg.use_cache = False
@@ -719,16 +699,16 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
 
         # Load in the weights, using our custom load_and_quantize method which quantizes Params4bit on the fly
         # and then places each layer on CPU or meta if using low_memory to minimize GPU memory usage
-        print("Loading model", rank)
+        print("Loading model", global_rank, local_rank)
         for filename in files:
             weights = safetensors.torch.load_file(filename)
             for name, param in weights.items():
-                load_and_quantize(model, name, param, dtype=torch_dtype, device=rank, skip_names=load_param_skip_names,
-                                  is_meta_rank=(args["low_memory"] and rank!=0), verbose=args["verbose"])
+                load_and_quantize(model, name, param, dtype=torch_dtype, device=local_rank, skip_names=load_param_skip_names,
+                                  is_meta_rank=(args["low_memory"] and local_rank!=0), verbose=args["verbose"])
         if args["precision"] == "bf16":
             model.to(torch_dtype)
 
-    print("Model created", rank, torch.cuda.memory_allocated(rank))
+    print("Model created", global_rank, local_rank, torch.cuda.memory_allocated(local_rank))
 
     # PEFT setup (LoRA and QLoRA)
     if args["train_type"] in ["lora", "qlora"]:
@@ -741,12 +721,12 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
         )
         # PEFT will move quant_state to meta device, so this method prevents that
         # from happening by replacing quant_state.to with a dummy function
-        if rank!=0 and args["low_memory"]:
+        if local_rank !=0 and args["low_memory"]:
             setup_quantized_meta_for_peft(model)
 
         model = get_peft_model(model, peft_config)
 
-        if rank==0:
+        if global_rank == 0:
             model.print_trainable_parameters()
         elif args['low_memory']:
             # And then setup_quantized_peft_meta_for_training sets quant_state.to back to normal
@@ -766,14 +746,14 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
             else:
                 p.requires_grad = False
 
-        print("LoRA layers added", rank, torch.cuda.memory_allocated(rank))
+        print("LoRA layers added", global_rank, local_rank, torch.cuda.memory_allocated(local_rank))
 
-    logger.log({"memory_after_model_creation": torch.cuda.memory_allocated(rank)}, rank)
+    logger.log({"memory_after_model_creation": torch.cuda.memory_allocated(local_rank)}, global_rank)
 
     # Wrap model with llama-recipies LoRA policy
     my_auto_wrap_policy = create_default_auto_wrap_policy()
 
-    print("Wrapping model w/ FSDP", rank)
+    print("Wrapping model w/ FSDP", global_rank, local_rank)
     sharding_strategy = ShardingStrategy.FULL_SHARD if not args['use_ddp'] else ShardingStrategy.NO_SHARD
     model = FSDP(
         model,
@@ -785,11 +765,11 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
         device_id=torch.cuda.current_device(),
         sync_module_states=args["low_memory"],
         param_init_fn=lambda module: module.to_empty(device=torch.device("cuda"), recurse=False)
-            if (rank!=0 and args["low_memory"]) else None, # TODO note about meta device and why we need this
+            if (local_rank !=0 and args["low_memory"]) else None, # TODO note about meta device and why we need this
         mixed_precision=mp_policy,
     )
-    print("Wrapped model", rank, torch.cuda.memory_allocated(rank))
-    logger.log({"memory_after_model_wrap": torch.cuda.memory_allocated(rank)}, rank)
+    print("Wrapped model", global_rank, local_rank, torch.cuda.memory_allocated(local_rank))
+    logger.log({"memory_after_model_wrap": torch.cuda.memory_allocated(local_rank)}, global_rank)
 
     # Synchronize at the start
     dist.barrier()
@@ -801,12 +781,12 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
             checkpoint_impl=CheckpointImpl.NO_REENTRANT,
         )
         check_fn = lambda submodule: isinstance(submodule, GC_LAYER_CLASS)
-        print("Applying activation checkpointing", rank)
+        print("Applying activation checkpointing", local_rank)
         apply_activation_checkpointing(
             model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=check_fn
         )
 
-    if rank == 0 and args['verbose']:
+    if global_rank == 0 and args['verbose']:
         print("Model:")
         print(model)
         print("Starting training")
@@ -819,7 +799,7 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     lr_scheduler, num_training_steps = get_lr_scheduler(optimizer, dataloader, gradient_accumulation_steps, args)
 
     # Sanity check: see what parameters the optimizer has and which require grad:
-    if rank == 0 and args['verbose']:
+    if global_rank == 0 and args['verbose']:
         print("Optimizer params:")
         for group in optimizer.param_groups:
             for param in group['params']:
@@ -834,9 +814,9 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     scale_grads = scaler is not None
 
     # Train loop
-    if rank == 0:
+    if global_rank == 0:
         print("Total Training Steps:", num_training_steps)
-    progress_bar = tqdm(range(num_training_steps), disable=rank != 0)
+    progress_bar = tqdm(range(num_training_steps), disable=global_rank != 0)
     init_start_event.record()
     log_loss, log_lr = 0.0, -1
     steps = 0
@@ -844,9 +824,9 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
     ckpt_files = []
 
     for epoch in range(args['num_epochs']):
-        update_progress_bar(progress_bar, epoch, log_loss, log_lr, rank)
+        update_progress_bar(progress_bar, epoch, log_loss, log_lr, global_rank)
         model.train()
-        ddp_loss = torch.zeros(2).to(rank)
+        ddp_loss = torch.zeros(4).to(local_rank)
 
         for batch_idx, batch in enumerate(dataloader):
             accumulate_grads = (batch_idx+1) % gradient_accumulation_steps == 0
@@ -874,12 +854,25 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
             # Forward pass
             with sync_context:
                 with autocast:
+                    labels = batch['labels'].to(local_rank)
                     output = model(
-                        batch['input_ids'].to(rank),
-                        labels=batch['labels'].to(rank),
-                        attention_mask=None if batch['attention_mask'] is None else batch['attention_mask'].to(rank),
+                        batch['input_ids'].to(local_rank),
+                        labels=labels,
+                        attention_mask=None if batch['attention_mask'] is None else batch['attention_mask'].to(local_rank),
                     )
                     loss = output.loss
+
+                    # Shift so that tokens < n predict n
+                    shift_logits = output.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    # Flatten the tokens
+                    shift_logits = shift_logits.view(-1, model.config.vocab_size)
+                    shift_labels = shift_labels.view(-1)
+                    # Enable model parallelism
+                    shift_labels = shift_labels.to(shift_logits.device)
+
+                    token_preds = torch.argmax(shift_logits, dim=1).squeeze()
+                    token_accuracy = (token_preds == shift_labels).sum() / len(shift_labels)
 
                 # Scale loss for gradient accumulation
                 loss = loss / gradient_accumulation_steps
@@ -898,6 +891,8 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
             bs = batch['input_ids'].shape[0]
             ddp_loss[0] += loss.item() * bs * gradient_accumulation_steps
             ddp_loss[1] += bs
+            ddp_loss[2] += token_accuracy
+            ddp_loss[3] += 1
 
             # Step the optimizer (w/ gradient accumulation)
             if accumulate_grads:
@@ -918,24 +913,24 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
                 if args["save_model"] and steps % args["save_steps"] == 0:
                     if val_dataloader is not None:
                         model.eval()
-                        if rank == 0:
+                        if global_rank == 0:
                             print(f"Starting validation run @ step #{steps}...")
-                        val_metrics, keys = run_validation(args, model, rank, val_dataloader, autocast)
+                        val_metrics, keys = run_validation(args, model, local_rank, val_dataloader, autocast)
 
                         dist.all_reduce(val_metrics, op=dist.ReduceOp.SUM)
-                        if rank == 0:
+                        if global_rank == 0:
                             if args["log_to"] == 'wandb':
                                 for kidx, k in enumerate(keys):
                                     offset = kidx * 3
                                     denom = val_metrics[offset + 0]
-                                    logger.log({f"validation/{k}_accuracy": val_metrics[offset + 1] / denom}, rank)
-                                    logger.log({f"validation/{k}_answer_likelihood": val_metrics[offset + 2] / denom}, rank)
+                                    logger.log({f"validation/{k}_accuracy": val_metrics[offset + 1] / denom}, global_rank)
+                                    logger.log({f"validation/{k}_answer_likelihood": val_metrics[offset + 2] / denom}, global_rank)
 
                             print(f"Resuming training from step #{steps}...")
                         model.train()
-                    ckpt_fn = save_checkpoint(args, model, rank, print_func, steps)
+                    ckpt_fn = save_checkpoint(args, model, global_rank, print_func, steps)
 
-                    if rank == 0:
+                    if global_rank == 0:
                         ckpt_files.append(ckpt_fn)
                         if len(ckpt_files) > args['save_limit']:
                             print(f'Removing {ckpt_files[0]}')
@@ -970,37 +965,38 @@ def fsdp_main(rank:int, world_size:int, args:Dict):
             # Log loss every gradient update steps
             if accumulate_grads:
                 dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
-                if rank == 0:
+                if global_rank == 0:
                     log_loss = ddp_loss[0] / ddp_loss[1]
+                    token_acc = 100 * ddp_loss[2] / ddp_loss[3]
                     if lr_scheduler is not None:
                         log_lr = lr_scheduler.get_last_lr()[0]
                     else:
                         log_lr = args["lr"]
-                    update_progress_bar(progress_bar, epoch, log_loss, log_lr, rank)
+                    update_progress_bar(progress_bar, epoch, log_loss, log_lr, global_rank)
                     if args["log_to"] == 'wandb':
-                        logger.log({"train/loss": log_loss, "lr": log_lr}, rank)
-                ddp_loss = torch.zeros(2).to(rank)
+                        logger.log({"train/loss": log_loss, "train/token_accuracy": token_acc, "lr": log_lr}, global_rank)
+                ddp_loss = torch.zeros(4).to(local_rank)
 
     # Synchronize at the end and record time
     dist.barrier()
     torch.cuda.synchronize()
     init_end_event.record()
 
-    print("Finished training", rank)
+    print("Finished training", global_rank, local_rank)
 
     # Print time and model
-    if rank == 0:
+    if global_rank == 0:
         time_taken = init_start_event.elapsed_time(init_end_event) / 1000
         print_func(f"CUDA event elapsed time: {time_taken} sec")
-        logger.log({"time_taken": time_taken}, rank)
+        logger.log({"time_taken": time_taken}, global_rank)
 
     # End logging
-    logger.finish(rank=rank)
+    logger.finish(rank=global_rank)
 
     # Save modelf - ref: https://github.com/pytorch/pytorch/issues/98823
     if args["save_model"]:
-        ckpt_fn = save_checkpoint(args, model, rank, print_func, steps)
-        if rank == 0:
+        ckpt_fn = save_checkpoint(args, model, global_rank, print_func, steps)
+        if global_rank == 0:
             ckpt_files.append(ckpt_fn)
             print('The following checkpoints have been saved!\n')
             print('\n'.join(ckpt_files))
@@ -1048,6 +1044,7 @@ if __name__ == '__main__':
         # profile_memory: bool_arg = False, # Whether to profile memory usage for the first batch
         optimizer: Param("", choices=["adamw", "adam", "sgd", "adadelta"]) = "adamw", # Optimizer
         lr_scheduler: Param("", choices=["constant", "linear", "cosine"]) = "constant", # Learning Rate Scheduler. linear and cosine warm up for 10% of training steps.
+        warmup_fraction: float = 0.005, # Fraction of training steps spent warming up lr
         log_to: Param("", choices=["tqdm", "wandb", "stdout"]) = "tqdm", # Where to log output
         master_addr: str = "localhost", # For distributed training
         master_port: str = "12355", # For distributed training, must be the same for all processes
@@ -1082,10 +1079,14 @@ if __name__ == '__main__':
         elif args["no_sync"] and args["gradient_accumulation_steps"] == 1:
             args["no_sync"] = False
 
-        # Run
-        mp.spawn(
-            fsdp_main,
-            args=(world_size, args),
-            nprocs=world_size,
-            join=True
-        )
+        # # Run
+        # mp.spawn(
+        #     fsdp_main,
+        #     args=(world_size, args),
+        #     nprocs=world_size,
+        #     join=True
+        # )
+
+        global_rank = int(os.environ['RANK'])
+        local_rank = int(os.environ['LOCAL_RANK'])
+        fsdp_main(args, global_rank, local_rank, world_size=world_size)

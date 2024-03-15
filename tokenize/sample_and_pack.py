@@ -11,11 +11,14 @@ import h5py
 from tqdm import tqdm
 
 from sample_utils import sample_dataset
+from batch_tokenize import TOKENIZERS
 
 
 def pack(args):
+    data_dir = os.path.join(args.pile_dir, f'dataset_hf_clean_{args.model}_tokenized')
+
     # Don't need meta for final tokenized, packed dataset. Just "input_ids" and "source".
-    raw_dataset = load_from_disk(args.dataset).remove_columns('meta')
+    raw_dataset = load_from_disk(data_dir).remove_columns('meta')
 
     reweighted_dataset, data_mixture = sample_dataset(raw_dataset, reweighting_config=args.reweighting_config, target_num_tokens=args.target_num_tokens)
 
@@ -48,7 +51,7 @@ def pack(args):
         num_proc=args.num_proc
     )
 
-    shape = (len(reweighted_dataset), 8192)  # ~ 10-20 million rows, 8192 columns
+    shape = (len(reweighted_dataset), args.max_seq_length)  # ~ 10-20 million rows, max_seq_length columns
     dtype = np.int32  # Assuming 32-bit integers
     fp = np.memmap(args.out_fn, dtype=dtype, mode='w+', shape=shape)
 
@@ -70,11 +73,12 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=1992, help='Random seed')
     parser.add_argument('--num_proc', default=multiprocess.cpu_count() - 16, type=int)
     parser.add_argument('--max_seq_length', type=int, default=8192, help='Sequence length for processing')
-    parser.add_argument('--dataset', type=str, default='/weka/home-griffin/clinical_pile/v1/dataset_hf_tokenized', help='Name of the dataset to process')
+    parser.add_argument('--pile_dir', type=str, default='/weka/home-griffin/clinical_pile/v1', help='Name of the dataset to process')
     parser.add_argument('--target_num_tokens', type=int, default=int(1e10))
     parser.add_argument('--reweighting_config', type=str, default='all')
     parser.add_argument('-all_configs', default=False, action='store_true')
     parser.add_argument('--out_dir', default='/weka/home-griffin/clinical_pile/v1/packed')
+    parser.add_argument('--model', type=str, default='llama2')
 
     args = parser.parse_args()
 
@@ -92,9 +96,9 @@ if __name__ == '__main__':
         print(reweighting_configs)
         for config in reweighting_configs:
             args.reweighting_config = config
-            args.out_fn = os.path.join(args.out_dir, f'{args.reweighting_config}.memmap')
+            args.out_fn = os.path.join(args.out_dir, f'{args.reweighting_config}_{args.model}_{args.max_seq_length}.memmap')
             pack(args)
     else:
-        args.out_fn = os.path.join(args.out_dir, f'{args.reweighting_config}.memmap')
+        args.out_fn = os.path.join(args.out_dir, f'{args.reweighting_config}_{args.model}_{args.max_seq_length}.memmap')
         pack(args)
     

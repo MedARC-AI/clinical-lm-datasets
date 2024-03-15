@@ -167,3 +167,4 @@ wandb
 slurm*.out
 memory_snapshot.pickle
 logs/
+*.out

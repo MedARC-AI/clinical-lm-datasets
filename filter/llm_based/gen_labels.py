@@ -109,6 +109,14 @@ def mixtral_likert(model, tokenizer, prompt):
 
     chat_text = tokenizer.apply_chat_template(messages, tokenize=False) + '\n\n' + ANSWER_PREFIX
     inputs = tokenizer(chat_text, return_tensors='pt')['input_ids'].to('cuda')
+
+    assert inputs.dim() == 2
+    # Eventually remove
+    print(inputs.size()[1])
+    if inputs.size()[1] >= 2048:
+        # Halve the prompt
+        return mixtral_likert(model, tokenizer, prompt[:len(prompt) // 2])
+
     logits = model(inputs).logits[:, -1, :][0]
     ans_probs = torch.softmax(logits[LIKERT_IDS], dim=0).detach().cpu().numpy()
     expectation = sum([p * x for p, x in zip(ans_probs, range(1, 6))])
@@ -122,7 +130,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='mixtral', choices=list(MODELS.keys()))
     parser.add_argument('--paras_per_doc', default=1)
     parser.add_argument('--excluded_sources', default=None)
-    parser.add_argument('--max_para_toks', default=768, type=int)
+    parser.add_argument('--max_para_toks', default=512, type=int)
     parser.add_argument('--min_para_toks', default=32, type=int)
     parser.add_argument('--dimension', default='quality', choices=['quality', 'topic'])
     parser.add_argument('--data_dir', default='/weka/home-griffin/clinical_pile/v1/dataset_hf_1mn_sample', type=str)
@@ -136,7 +144,12 @@ if __name__ == '__main__':
     out_dir = args.data_dir + f'_llm_{args.dimension}_scores'
     os.makedirs(out_dir, exist_ok=True)
 
-    data = load_from_disk(args.data_dir).shuffle()
+    data = load_from_disk(args.data_dir)
+    # Original Dataset Index for saving the file
+    data = data.map(
+        lambda row, idx: {'dataset_idx': idx},
+        with_indices=True
+    )
     N = len(data)
 
     if args.chunk is not None:
@@ -149,12 +162,22 @@ if __name__ == '__main__':
         filt_N = len(data)
         print(f'Left with {filt_N} / {N} examples...')
 
+    cache_dir = os.path.join(out_dir, 'hf')
+    if os.path.exists(cache_dir):
+        cached_labels = load_from_disk(cache_dir)
+        done_uuids = set(cached_labels['uuid'])
+        print(f'Loaded {len(done_uuids)} already generated labels from {cache_dir}. Filtering them out of shard.')
+        data = data.filter(
+            lambda row: row['uuid'] not in done_uuids, num_proc=32
+        )
+
     if args.model == 'mixtral':
         quantization_config = BitsAndBytesConfig(
             load_in_8bit=True,
             bnb_8bit_compute_dtype=torch.bfloat16
         )
 
+        print(f'Loading {MODELS[args.model]}...')
         model = AutoModelForCausalLM.from_pretrained(
             MODELS[args.model],
             # torch_dtype='bfloat16',
@@ -175,13 +198,9 @@ if __name__ == '__main__':
         )
 
     fns_to_load = []
-    for idx, row in tqdm(enumerate(data), total=len(data)):
-        # Make this the pre-sharded index of the data so that we can re-run with different num_chunks and get same results
-        if args.chunk is None:
-            out_fn = os.path.join(out_dir, f'{idx}.json')
-        else:
-            out_fn = os.path.join(out_dir, f'{args.chunk}_{idx}.json')
-
+    for row in tqdm(data, total=len(data)):
+        dataset_idx = row['dataset_idx']
+        out_fn = os.path.join(out_dir, f'{dataset_idx}.json')
         fns_to_load.append(out_fn)
 
         if os.path.exists(out_fn) and not args.overwrite:

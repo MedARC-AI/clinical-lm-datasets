@@ -17,6 +17,7 @@
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
 import logging
+from scipy.stats import pearsonr
 import os
 import random
 import sys
@@ -432,61 +433,64 @@ def main():
 
     # Trying to have good defaults here, don't hesitate to tweak to your needs.
 
-    is_regression = (
-        raw_datasets["train"].features["label"].dtype in ["float32", "float64"]
-        if data_args.do_regression is None
-        else data_args.do_regression
-    )
+    # is_regression = (
+    #     raw_datasets["train"].features["label"].dtype in ["float32", "float64"]
+    #     if data_args.do_regression is None
+    #     else data_args.do_regression
+    # )
 
-    is_multi_label = False
-    if is_regression:
-        label_list = None
-        num_labels = 1
-        # regession requires float as label type, let's cast it if needed
-        for split in raw_datasets.keys():
-            if raw_datasets[split].features["label"].dtype not in ["float32", "float64"]:
-                logger.warning(
-                    f"Label type for {split} set to float32, was {raw_datasets[split].features['label'].dtype}"
-                )
-                features = raw_datasets[split].features
-                features.update({"label": Value("float32")})
-                try:
-                    raw_datasets[split] = raw_datasets[split].cast(features)
-                except TypeError as error:
-                    logger.error(
-                        f"Unable to cast {split} set to float32, please check the labels are correct, or maybe try with --do_regression=False"
-                    )
-                    raise error
+    # is_regression = False
 
-    else:  # classification
-        if raw_datasets["train"].features["label"].dtype == "list":  # multi-label classification
-            is_multi_label = True
-            logger.info("Label type is list, doing multi-label classification")
-        # Trying to find the number of labels in a multi-label classification task
-        # We have to deal with common cases that labels appear in the training set but not in the validation/test set.
-        # So we build the label list from the union of labels in train/val/test.
-        label_list = get_label_list(raw_datasets, split="train")
-        for split in ["validation", "test"]:
-            if split in raw_datasets:
-                val_or_test_labels = get_label_list(raw_datasets, split=split)
-                diff = set(val_or_test_labels).difference(set(label_list))
-                if len(diff) > 0:
-                    # add the labels that appear in val/test but not in train, throw a warning
-                    logger.warning(
-                        f"Labels {diff} in {split} set but not in training set, adding them to the label list"
-                    )
-                    label_list += list(diff)
-        # if label is -1, we throw a warning and remove it from the label list
-        for label in label_list:
-            if label == -1:
-                logger.warning("Label -1 found in label list, removing it.")
-                label_list.remove(label)
+    # is_multi_label = False
+    # if is_regression:
+    #     label_list = None
+    #     num_labels = 1
+    #     # regession requires float as label type, let's cast it if needed
+    #     for split in raw_datasets.keys():
+    #         if raw_datasets[split].features["label"].dtype not in ["float32", "float64"]:
+    #             logger.warning(
+    #                 f"Label type for {split} set to float32, was {raw_datasets[split].features['label'].dtype}"
+    #             )
+    #             features = raw_datasets[split].features
+    #             features.update({"label": Value("float32")})
+    #             try:
+    #                 raw_datasets[split] = raw_datasets[split].cast(features)
+    #             except TypeError as error:
+    #                 logger.error(
+    #                     f"Unable to cast {split} set to float32, please check the labels are correct, or maybe try with --do_regression=False"
+    #                 )
+    #                 raise error
 
-        label_list.sort()
-        num_labels = len(label_list)
-        if num_labels <= 1:
-            raise ValueError("You need more than one label to do classification.")
+    # else:  # classification
+    #     if raw_datasets["train"].features["label"].dtype == "list":  # multi-label classification
+    #         is_multi_label = True
+    #         logger.info("Label type is list, doing multi-label classification")
+    #     # Trying to find the number of labels in a multi-label classification task
+    #     # We have to deal with common cases that labels appear in the training set but not in the validation/test set.
+    #     # So we build the label list from the union of labels in train/val/test.
+    #     label_list = get_label_list(raw_datasets, split="train")
+    #     for split in ["validation", "test"]:
+    #         if split in raw_datasets:
+    #             val_or_test_labels = get_label_list(raw_datasets, split=split)
+    #             diff = set(val_or_test_labels).difference(set(label_list))
+    #             if len(diff) > 0:
+    #                 # add the labels that appear in val/test but not in train, throw a warning
+    #                 logger.warning(
+    #                     f"Labels {diff} in {split} set but not in training set, adding them to the label list"
+    #                 )
+    #                 label_list += list(diff)
+    #     # if label is -1, we throw a warning and remove it from the label list
+    #     for label in label_list:
+    #         if label == -1:
+    #             logger.warning("Label -1 found in label list, removing it.")
+    #             label_list.remove(label)
 
+    #     label_list.sort()
+    #     num_labels = len(label_list)
+    #     if num_labels <= 1:
+    #         raise ValueError("You need more than one label to do classification.")
+
+    num_labels = 1
     # Load pretrained model and tokenizer
     # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
@@ -500,15 +504,19 @@ def main():
         trust_remote_code=model_args.trust_remote_code,
     )
 
-    if is_regression:
-        config.problem_type = "regression"
-        logger.info("setting problem type to regression")
-    elif is_multi_label:
-        config.problem_type = "multi_label_classification"
-        logger.info("setting problem type to multi label classification")
-    else:
-        config.problem_type = "single_label_classification"
-        logger.info("setting problem type to single label classification")
+    # https://github.com/huggingface/transformers/blob/7ae6f070044b0171a71f3269613bf02fd9fca6f2/src/transformers/models/bert/modeling_bert.py#L1581C47-L1581C73
+    # Just means it will call BCELogitsWithLoss on the data which we can use to pass soft labels
+    config.problem_type = 'multi_label_classification'
+
+    # if is_regression:
+    #     config.problem_type = "regression"
+    #     logger.info("setting problem type to regression")
+    # elif is_multi_label:
+    #     config.problem_type = "multi_label_classification"
+    #     logger.info("setting problem type to multi label classification")
+    # else:
+    #     config.problem_type = "single_label_classification"
+    #     logger.info("setting problem type to single label classification")
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
@@ -538,22 +546,24 @@ def main():
 
     # for training ,we will update the config with label infos,
     # if do_train is not set, we will use the label infos in the config
-    if training_args.do_train and not is_regression:  # classification, training
-        label_to_id = {v: i for i, v in enumerate(label_list)}
-        # update config with label infos
-        if model.config.label2id != label_to_id:
-            logger.warning(
-                "The label2id key in the model config.json is not equal to the label2id key of this "
-                "run. You can ignore this if you are doing finetuning."
-            )
-        model.config.label2id = label_to_id
-        model.config.id2label = {id: label for label, id in label_to_id.items()}
-    elif not is_regression:  # classification, but not training
-        logger.info("using label infos in the model config")
-        logger.info("label2id: {}".format(model.config.label2id))
-        label_to_id = model.config.label2id
-    else:  # regression
-        label_to_id = None
+    # if training_args.do_train and not is_regression:  # classification, training
+    #     label_to_id = {v: i for i, v in enumerate(label_list)}
+    #     # update config with label infos
+    #     if model.config.label2id != label_to_id:
+    #         logger.warning(
+    #             "The label2id key in the model config.json is not equal to the label2id key of this "
+    #             "run. You can ignore this if you are doing finetuning."
+    #         )
+    #     model.config.label2id = label_to_id
+    #     model.config.id2label = {id: label for label, id in label_to_id.items()}
+    # elif not is_regression:  # classification, but not training
+    #     logger.info("using label infos in the model config")
+    #     logger.info("label2id: {}".format(model.config.label2id))
+    #     label_to_id = model.config.label2id
+    # else:  # regression
+    #     label_to_id = None
+
+    label_to_id = None
 
     if data_args.max_seq_length > tokenizer.model_max_length:
         logger.warning(
@@ -568,14 +578,24 @@ def main():
             ids[label_to_id[label]] = 1.0
         return ids
 
+    add_global_att = 'longformer' in model_args.model_name_or_path
+
     def preprocess_function(examples):
         # Tokenize the texts
         result = tokenizer(examples[data_args.text_column_names], padding=padding, max_length=max_seq_length, truncation=True)
-        if label_to_id is not None and "label" in examples:
-            if is_multi_label:
-                result["label"] = [multi_labels_to_ids(l) for l in examples["label"]]
-            else:
-                result["label"] = [(label_to_id[str(l)] if l != -1 else -1) for l in examples["label"]]
+        if add_global_att:
+            gatt = []
+            for ids in result['input_ids']:
+                num_zeros = len(ids) - 1
+                gatt.append([1.0] + [0.0] * num_zeros)
+            result['global_attention_mask'] = gatt
+        # if label_to_id is not None and "label" in examples:
+            # if is_multi_label:
+            #     result["label"] = [multi_labels_to_ids(l) for l in examples["label"]]
+            # else:
+            #     result["label"] = [(label_to_id[str(l)] if l != -1 else -1) for l in examples["label"]]
+            # Not sure if the [l] needs to be wrapped in a list or not yet
+        result['label'] = [[l] for l in examples['label']]
         return result
 
     # Running the preprocessing pipeline on all the datasets
@@ -626,41 +646,45 @@ def main():
         for index in random.sample(range(len(train_dataset)), 3):
             logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
-    if data_args.metric_name is not None:
-        metric = (
-            evaluate.load(data_args.metric_name, config_name="multilabel", cache_dir=model_args.cache_dir)
-            if is_multi_label
-            else evaluate.load(data_args.metric_name, cache_dir=model_args.cache_dir)
-        )
-        logger.info(f"Using metric {data_args.metric_name} for evaluation.")
-    else:
-        if is_regression:
-            metric = evaluate.load("mse", cache_dir=model_args.cache_dir)
-            logger.info("Using mean squared error (mse) as regression score, you can use --metric_name to overwrite.")
-        else:
-            if is_multi_label:
-                metric = evaluate.load("f1", config_name="multilabel", cache_dir=model_args.cache_dir)
-                logger.info(
-                    "Using multilabel F1 for multi-label classification task, you can use --metric_name to overwrite."
-                )
-            else:
-                metric = evaluate.load("accuracy", cache_dir=model_args.cache_dir)
-                logger.info("Using accuracy as classification score, you can use --metric_name to overwrite.")
+    # if data_args.metric_name is not None:
+    #     metric = (
+    #         evaluate.load(data_args.metric_name, config_name="multilabel", cache_dir=model_args.cache_dir)
+    #         if is_multi_label
+    #         else evaluate.load(data_args.metric_name, cache_dir=model_args.cache_dir)
+    #     )
+    #     logger.info(f"Using metric {data_args.metric_name} for evaluation.")
+    # else:
+    #     if is_regression:
+    #         metric = evaluate.load("mse", cache_dir=model_args.cache_dir)
+    #         logger.info("Using mean squared error (mse) as regression score, you can use --metric_name to overwrite.")
+    #     else:
+    #         if is_multi_label:
+    #             metric = evaluate.load("f1", config_name="multilabel", cache_dir=model_args.cache_dir)
+    #             logger.info(
+    #                 "Using multilabel F1 for multi-label classification task, you can use --metric_name to overwrite."
+    #             )
+    #         else:
+    #             metric = evaluate.load("accuracy", cache_dir=model_args.cache_dir)
+    #             logger.info("Using accuracy as classification score, you can use --metric_name to overwrite.")
 
     def compute_metrics(p: EvalPrediction):
         preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
-        if is_regression:
-            preds = np.squeeze(preds)
-            result = metric.compute(predictions=preds, references=p.label_ids)
-        elif is_multi_label:
-            preds = np.array([np.where(p > 0, 1, 0) for p in preds])  # convert logits to multi-hot encoding
-            # Micro F1 is commonly used in multi-label classification
-            result = metric.compute(predictions=preds, references=p.label_ids, average="micro")
-        else:
-            preds = np.argmax(preds, axis=1)
-            result = metric.compute(predictions=preds, references=p.label_ids)
-        if len(result) > 1:
-            result["combined_score"] = np.mean(list(result.values())).item()
+        # if is_regression:
+        #     preds = np.squeeze(preds)
+        #     result = metric.compute(predictions=preds, references=p.label_ids)
+        # elif is_multi_label:
+        #     preds = np.array([np.where(p > 0, 1, 0) for p in preds])  # convert logits to multi-hot encoding
+        #     # Micro F1 is commonly used in multi-label classification
+        #     result = metric.compute(predictions=preds, references=p.label_ids, average="micro")
+        # else:
+        #     preds = np.argmax(preds, axis=1)
+        #     result = metric.compute(predictions=preds, references=p.label_ids)
+        # if len(result) > 1:
+        #     result["combined_score"] = np.mean(list(result.values())).item()
+
+        result = {
+            'correlation': pearsonr(np.squeeze(preds), np.squeeze(p.label_ids))[0]
+        }
         return result
 
     # Data collator will default to DataCollatorWithPadding when the tokenizer is passed to Trainer, so we change it if
@@ -716,30 +740,32 @@ def main():
         if "label" in predict_dataset.features:
             predict_dataset = predict_dataset.remove_columns("label")
         predictions = trainer.predict(predict_dataset, metric_key_prefix="predict").predictions
-        if is_regression:
-            predictions = np.squeeze(predictions)
-        elif is_multi_label:
-            # Convert logits to multi-hot encoding. We compare the logits to 0 instead of 0.5, because the sigmoid is not applied.
-            # You can also pass `preprocess_logits_for_metrics=lambda logits, labels: nn.functional.sigmoid(logits)` to the Trainer
-            # and set p > 0.5 below (less efficient in this case)
-            predictions = np.array([np.where(p > 0, 1, 0) for p in predictions])
-        else:
-            predictions = np.argmax(predictions, axis=1)
+        predictions = np.squeeze(predictions)
+        # if is_regression:
+        #     predictions = np.squeeze(predictions)
+        # elif is_multi_label:
+        #     # Convert logits to multi-hot encoding. We compare the logits to 0 instead of 0.5, because the sigmoid is not applied.
+        #     # You can also pass `preprocess_logits_for_metrics=lambda logits, labels: nn.functional.sigmoid(logits)` to the Trainer
+        #     # and set p > 0.5 below (less efficient in this case)
+        #     predictions = np.array([np.where(p > 0, 1, 0) for p in predictions])
+        # else:
+        #     predictions = np.argmax(predictions, axis=1)
         output_predict_file = os.path.join(training_args.output_dir, "predict_results.txt")
         if trainer.is_world_process_zero():
             with open(output_predict_file, "w") as writer:
                 logger.info("***** Predict results *****")
                 writer.write("index\tprediction\n")
                 for index, item in enumerate(predictions):
-                    if is_regression:
-                        writer.write(f"{index}\t{item:3.3f}\n")
-                    elif is_multi_label:
-                        # recover from multi-hot encoding
-                        item = [label_list[i] for i in range(len(item)) if item[i] == 1]
-                        writer.write(f"{index}\t{item}\n")
-                    else:
-                        item = label_list[item]
-                        writer.write(f"{index}\t{item}\n")
+                    writer.write(f"{index}\t{item:3.3f}\n")
+                    # if is_regression:
+                    #     writer.write(f"{index}\t{item:3.3f}\n")
+                    # elif is_multi_label:
+                    #     # recover from multi-hot encoding
+                    #     item = [label_list[i] for i in range(len(item)) if item[i] == 1]
+                    #     writer.write(f"{index}\t{item}\n")
+                    # else:
+                    #     item = label_list[item]
+                    #     writer.write(f"{index}\t{item}\n")
         logger.info("Predict results saved at {}".format(output_predict_file))
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-classification"}
 

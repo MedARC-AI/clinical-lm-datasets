@@ -20,6 +20,7 @@ orjson
 matplotlib
 seaborn
 tabulate
+ujson
 webdriver-manager
 spacy
 scispacy

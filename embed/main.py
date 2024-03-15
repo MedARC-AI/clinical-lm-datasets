@@ -48,12 +48,12 @@ if __name__ == '__main__':
         print(f'Processing Shard={shard}/{args.num_shards} for Chunk={args.chunk}/{args.num_chunks}')
 
         shard_dir = os.path.join(args.save_dir, f'{shard}-{args.num_shards}')
+        embed_fn = os.path.join(shard_dir, 'embeddings.h5')
+        id_dir = os.path.join(shard_dir, 'ids')
 
-        if os.path.exists(shard_dir):
-            print(f'{shard_dir} exists. Skipping...')
+        if os.path.exists(embed_fn):
+            print(f'{embed_fn} exists. Skipping...')
             continue
-
-        os.makedirs(shard_dir, exist_ok=True)
 
         shard_hf = dataset.shard(num_shards=args.num_shards, index=shard)
 
@@ -63,12 +63,11 @@ if __name__ == '__main__':
             max_length=args.max_length
         )
 
-        embed_fn = os.path.join(shard_dir, 'embeddings.h5')
+        os.makedirs(shard_dir, exist_ok=True)
         print(f'Saving {len(embeddings)} embeddings to {embed_fn}.')
         with h5py.File(embed_fn, 'w') as hf:
             hf.create_dataset('array', data=embeddings)
 
-        id_dir = os.path.join(shard_dir, 'ids')
         remove_cols = [x for x in shard_hf.column_names if x not in {'id', 'uuid', 'source'}]
         print(f'Saving non-text columns of dataset to {id_dir} to match with embeddings.')
         shard_hf.remove_columns(remove_cols).save_to_disk(id_dir)

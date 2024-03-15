@@ -10,6 +10,7 @@ from ckpt_to_hf import load_model
 from glob import glob
 from torch.nn.utils.rnn import pad_sequence
 import numpy as np
+np.random.seed(1992)
 import regex as re
 from tqdm import tqdm
 import string
@@ -29,6 +30,8 @@ if __name__ == '__main__':
     parser.add_argument('--weight_dir', default='/weka/home-griffin/weights/finetune/Qwen/Qwen1.5-0.5B')
     parser.add_argument('--experiment', default='all_v1')
     parser.add_argument('-eval_pretrained', default=False, action='store_true')
+    parser.add_argument('--fewshot_n', default=5, type=int)
+    parser.add_argument('--fewshot_split', default='train')
     parser.add_argument('--ckpt', type=int, default=-1)  # -1 means take the last checkpoint
 
     parser.add_argument('--dataset', default='instruction_pile')
@@ -77,7 +80,16 @@ if __name__ == '__main__':
 
     out_fn = os.path.join(model_dir, f'{args.dataset}_results.csv')
 
-    test = load_from_disk(EVAL_DATASETS[args.dataset])['test']
+    dataset = load_from_disk(EVAL_DATASETS[args.dataset])
+    test = dataset['test']
+
+    fewshot_samples = []
+    if args.fewshot_n > 0:
+        fewshot_data = dataset[args.fewshot_split]
+        idxs = np.arange(len(fewshot_data))
+        np.random.shuffle(idxs)
+        fewshot_samples = fewshot_data.select(idxs[:args.fewshot_n])
+        fewshot_samples = [x['prompt'] + x['completion'] for x in fewshot_samples]
 
     pred_label_dist = {}
     model_inputs = []
@@ -88,7 +100,12 @@ if __name__ == '__main__':
         if source not in pred_label_dist:
             pred_label_dist[source] = [0 for _ in range(num_options)]
         
-        input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.int64)
+        if len(fewshot_samples) == 0:
+            input = prompt
+        else:
+            input = '\n\n**********\n\n'.join(fewshot_samples + [prompt])
+
+        input_ids = torch.tensor(tokenizer.encode(input), dtype=torch.int64)
     
         letter_options = list(string.ascii_uppercase[:num_options])
         assert completion in letter_options
@@ -101,7 +118,7 @@ if __name__ == '__main__':
             'idx': idx,
             'source': source,
             'input_ids': input_ids,
-            'last_logit_idx': len(input_ids) - 1, # Pre-Padding where do we extract the data
+            'last_logit_idx': len(input_ids) - 1,  # Pre-Padding where do we extract the data
             'label_ids': label_ids,
             'ground_truth_idx': ground_truth_idx,
         })
