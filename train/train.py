@@ -13,12 +13,13 @@ Not all combinations of arguments will work. See the accompanying blog post for 
 # Imports
 
 # General
-import torch, os, gc, time, safetensors, copy, math, types
+import torch, os, safetensors, copy, math, types
 import functools
 import string
+from time import time
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
-from transformers.optimization import get_linear_schedule_with_warmup, get_constant_schedule
+from transformers.optimization import get_linear_schedule_with_warmup
 import bitsandbytes as bnb
 from torch.nn.utils.rnn import pad_sequence
 import torch.distributed as dist
@@ -355,7 +356,8 @@ def get_h5_dataloader(args:Dict, global_rank, world_size):
 
     def collate_fn(batch):
         input_ids = batch
-        input_ids = torch.LongTensor(np.concatenate(input_ids)).unsqueeze(0)
+        input_ids = torch.LongTensor(np.stack(input_ids))
+        assert input_ids.ndim == 2
         labels = input_ids.clone()  # LM loss (they will be shifted over in model)
         return {'input_ids': input_ids, 'attention_mask': None, 'labels': labels}
 
@@ -754,7 +756,7 @@ def fsdp_main(args, global_rank, local_rank, world_size):
     my_auto_wrap_policy = create_default_auto_wrap_policy()
 
     print("Wrapping model w/ FSDP", global_rank, local_rank)
-    sharding_strategy = ShardingStrategy.FULL_SHARD if not args['use_ddp'] else ShardingStrategy.NO_SHARD
+    sharding_strategy = ShardingStrategy.HYBRID_SHARD if not args['use_ddp'] else ShardingStrategy.NO_SHARD
     model = FSDP(
         model,
         sharding_strategy=sharding_strategy,
@@ -830,30 +832,15 @@ def fsdp_main(args, global_rank, local_rank, world_size):
 
         for batch_idx, batch in enumerate(dataloader):
             accumulate_grads = (batch_idx+1) % gradient_accumulation_steps == 0
-
-            # Prevent gradient syncing until update step if using no_sync option.
-            # Documentation states this should only be used on the root FSDP instance
-            # We assume this is a one-node setup
             if args['no_sync'] and not accumulate_grads:
                 sync_context = model.no_sync()
             else:
                 sync_context = nullcontext()
 
-            # Start logging memory (first iter) if requested
-            # MEMORY LEAK!!
-            # if batch_idx==0 and rank == 0 and epoch == 0 and args['profile_memory']:
-            #     torch.cuda.memory._record_memory_history()
-
-            # Reset peak memory to track that
-            # torch.cuda.reset_peak_memory_stats(rank)
-
-            # Log memory usage
-            # if batch_idx == 0 and epoch == 0:
-            #     logger.log({"memory_before_forward": torch.cuda.memory_allocated(rank)}, rank)
-
             # Forward pass
             with sync_context:
                 with autocast:
+                    t0 = time()
                     labels = batch['labels'].to(local_rank)
                     output = model(
                         batch['input_ids'].to(local_rank),
@@ -861,6 +848,8 @@ def fsdp_main(args, global_rank, local_rank, world_size):
                         attention_mask=None if batch['attention_mask'] is None else batch['attention_mask'].to(local_rank),
                     )
                     loss = output.loss
+                    t1 = time()
+                    forward_secs = t1 - t0
 
                     # Shift so that tokens < n predict n
                     shift_logits = output.logits[..., :-1, :].contiguous()
@@ -874,18 +863,21 @@ def fsdp_main(args, global_rank, local_rank, world_size):
                     token_preds = torch.argmax(shift_logits, dim=1).squeeze()
                     token_accuracy = (token_preds == shift_labels).sum() / len(shift_labels)
 
+                print('\n\n')
+                print('RAW HF LOSS: ', str(float(loss.item())))
+                print('\n\n')
+
                 # Scale loss for gradient accumulation
                 loss = loss / gradient_accumulation_steps
-
-                # Logs memory usage
-                # if batch_idx == 0 and epoch == 0:
-                #     logger.log({"memory_after_forward": torch.cuda.memory_allocated(rank)}, rank)
 
                 # Backward pass
                 if scale_grads:
                     scaler.scale(loss).backward()
                 else:
+                    t0 = time()
                     loss.backward()
+                    t1 = time()
+                    backward_secs = t1 - t0
 
             # Record loss
             bs = batch['input_ids'].shape[0]
@@ -902,7 +894,10 @@ def fsdp_main(args, global_rank, local_rank, world_size):
                     scaler.step(optimizer)
                     scaler.update()
                 else:
+                    t0 = time()
                     optimizer.step()
+                    t1 = time()
+                    optimizer_secs = t1 - t0
                 optimizer.zero_grad()
                 # avoid overhead when lr is constant.
                 if lr_scheduler is not None:
@@ -964,7 +959,10 @@ def fsdp_main(args, global_rank, local_rank, world_size):
 
             # Log loss every gradient update steps
             if accumulate_grads:
+                t0 = time()
                 dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
+                t1 = time()
+                reduce_secs = t1 - t0
                 if global_rank == 0:
                     log_loss = ddp_loss[0] / ddp_loss[1]
                     token_acc = 100 * ddp_loss[2] / ddp_loss[3]
@@ -974,7 +972,15 @@ def fsdp_main(args, global_rank, local_rank, world_size):
                         log_lr = args["lr"]
                     update_progress_bar(progress_bar, epoch, log_loss, log_lr, global_rank)
                     if args["log_to"] == 'wandb':
-                        logger.log({"train/loss": log_loss, "train/token_accuracy": token_acc, "lr": log_lr}, global_rank)
+                        log_dict = {"train/loss": log_loss, "train/token_accuracy": token_acc, "lr": log_lr}
+                        speed_dict = {
+                            'forward_secs': forward_secs,
+                            'backward_secs': backward_secs,
+                            'optimizer_secs': optimizer_secs,
+                            'reduce_secs': reduce_secs,
+                        }
+                        log_dict.update(speed_dict)
+                        logger.log(log_dict, global_rank)
                 ddp_loss = torch.zeros(4).to(local_rank)
 
     # Synchronize at the end and record time

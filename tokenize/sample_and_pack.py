@@ -74,7 +74,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_proc', default=multiprocess.cpu_count() - 16, type=int)
     parser.add_argument('--max_seq_length', type=int, default=8192, help='Sequence length for processing')
     parser.add_argument('--pile_dir', type=str, default='/weka/home-griffin/clinical_pile/v1', help='Name of the dataset to process')
-    parser.add_argument('--target_num_tokens', type=int, default=int(1e10))
+    parser.add_argument('--target_num_tokens', type=int, default=int(1e11)) # 100 billion
     parser.add_argument('--reweighting_config', type=str, default='all')
     parser.add_argument('-all_configs', default=False, action='store_true')
     parser.add_argument('--out_dir', default='/weka/home-griffin/clinical_pile/v1/packed')

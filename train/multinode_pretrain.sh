@@ -12,9 +12,9 @@
 #SBATCH --open-mode=append
 #SBATCH --exclusive
 
-if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 config experiment"
-    echo "This script requires exactly 2 arguments."
+if [ "$#" -ne 3 ]; then
+    echo "Usage: $0 config experiment context_length"
+    echo "This script requires exactly 3 arguments."
     exit 1
 fi
 
@@ -23,6 +23,7 @@ fi
 # ***********
 CONFIG=$1  # Data mixture "reweighting_config"
 EXPERIMENT=$2 # Run Name for logging to Wandb
+CONTEXT_LENGTH=$3  # 2048
 # ***********
 
 # ***********
@@ -30,7 +31,6 @@ EXPERIMENT=$2 # Run Name for logging to Wandb
 # ***********
 SIZE="7"
 MODEL="llama2"
-CONTEXT_LENGTH=4096
 if [ $MODEL == "llama2" ]; then
     MODEL_NAME="meta-llama/Llama-2-${SIZE}b-hf"
 elif [ $MODEL == "qwen" ]; then
@@ -44,9 +44,25 @@ fi
 # ***********
 # HYPER-PARAMS
 # ***********
+
+TARGET_BATCH_SIZE=0
+PER_DEVICE_BS=0
+
+if [ $CONTEXT_LENGTH -eq 2048 ]; then
+    TARGET_BATCH_SIZE=1024
+    PER_DEVICE_BS=8
+elif [ $CONTEXT_LENGTH -eq 4096 ]; then
+    TARGET_BATCH_SIZE=512
+    PER_DEVICE_BS=4
+elif [ $CONTEXT_LENGTH -eq 8192 ]; then
+    TARGET_BATCH_SIZE=512
+    PER_DEVICE_BS=4
+else
+    echo "Unrecognized Context Length {$CONTEXT_LENGTH}"
+    exit 1
+fi
+
 LR=3e-4
-TARGET_BATCH_SIZE=1024
-PER_DEVICE_BS=1
 NUM_EPOCHS=1
 WARMUP_FRACTION=0.005 # % of training steps over which to warmup lr
 GRAD_CLIPPING=true
@@ -101,7 +117,14 @@ echo WORLD_SIZE=${WORLD_SIZE}
 # Compute Grad Accum Steps
 # ***********
 EFFECTIVE_BATCH_SIZE=$(($PER_DEVICE_BS * $WORLD_SIZE))
+if [ "$EFFECTIVE_BATCH_SIZE" -gt "$TARGET_BATCH_SIZE" ]; then
+    echo "Exiting because the effective batch size ($EFFECTIVE_BATCH_SIZE) is greater than the target batch size ($TARGET_BATCH_SIZE)."
+    exit 1
+fi
 GRAD_ACCUM=$(($TARGET_BATCH_SIZE / $EFFECTIVE_BATCH_SIZE))
+echo CONTEXT_LENGTH=${CONTEXT_LENGTH}
+echo TARGET_BATCH_SIZE=${TARGET_BATCH_SIZE}
+echo PER_DEVICE_BS=${PER_DEVICE_BS}
 echo "GRAD ACCUM=${GRAD_ACCUM}"
 # ***********
 
@@ -133,7 +156,7 @@ export SCRIPT_ARGS=" \
     --context_length $CONTEXT_LENGTH \
     --num_epochs $NUM_EPOCHS \
     --train_type full \
-    --use_gradient_checkpointing false \
+    --use_gradient_checkpointing true \
     --use_cpu_offload false \
     --dataset $DATASET \
     --verbose true \

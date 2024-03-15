@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, Counter
 import torch
 import argparse
 import os
@@ -10,7 +10,7 @@ from ckpt_to_hf import load_model
 from glob import glob
 from torch.nn.utils.rnn import pad_sequence
 import numpy as np
-np.random.seed(1992)
+np.random.seed(4692)
 import regex as re
 from tqdm import tqdm
 import string
@@ -27,15 +27,16 @@ if __name__ == '__main__':
     
     parser.add_argument('--model_name', default='Qwen/Qwen1.5-0.5B')
     
-    parser.add_argument('--weight_dir', default='/weka/home-griffin/weights/finetune/Qwen/Qwen1.5-0.5B')
-    parser.add_argument('--experiment', default='all_v1')
+    parser.add_argument('--weight_dir', default='/weka/home-griffin/weights/pretrain/Qwen/Qwen1.5-0.5B')
+    parser.add_argument('--experiment', default='pubmed_v3')
     parser.add_argument('-eval_pretrained', default=False, action='store_true')
     parser.add_argument('--fewshot_n', default=5, type=int)
+    parser.add_argument('--source', default='all')
     parser.add_argument('--fewshot_split', default='train')
     parser.add_argument('--ckpt', type=int, default=-1)  # -1 means take the last checkpoint
 
     parser.add_argument('--dataset', default='instruction_pile')
-    parser.add_argument('--batch_size', default=8, type=int)
+    parser.add_argument('--batch_size', default=4, type=int)
 
     args = parser.parse_args()
 
@@ -82,14 +83,24 @@ if __name__ == '__main__':
 
     dataset = load_from_disk(EVAL_DATASETS[args.dataset])
     test = dataset['test']
+    print(Counter(test['source']))
 
-    fewshot_samples = []
+    if args.source == 'all':
+        sources = list(set(test['source']))
+    else:
+        sources = [args.source]
+    test = test.filter(lambda row: row['source'] in set(sources))
+
+    fewshot_samples = {s: [] for s in sources}
     if args.fewshot_n > 0:
         fewshot_data = dataset[args.fewshot_split]
-        idxs = np.arange(len(fewshot_data))
-        np.random.shuffle(idxs)
-        fewshot_samples = fewshot_data.select(idxs[:args.fewshot_n])
-        fewshot_samples = [x['prompt'] + x['completion'] for x in fewshot_samples]
+
+        for source in sources:
+            d = fewshot_data.filter(lambda row: row['source'] == source)
+            idxs = np.arange(len(d))
+            np.random.shuffle(idxs)
+            sampled_d = d.select(idxs[:args.fewshot_n])
+            fewshot_samples[source] = [x['prompt'] + x['completion'] for x in sampled_d]
 
     pred_label_dist = {}
     model_inputs = []
@@ -100,10 +111,10 @@ if __name__ == '__main__':
         if source not in pred_label_dist:
             pred_label_dist[source] = [0 for _ in range(num_options)]
         
-        if len(fewshot_samples) == 0:
+        if len(fewshot_samples[source]) == 0:
             input = prompt
         else:
-            input = '\n\n**********\n\n'.join(fewshot_samples + [prompt])
+            input = '\n\n**********\n\n'.join(fewshot_samples[source] + [prompt])
 
         input_ids = torch.tensor(tokenizer.encode(input), dtype=torch.int64)
     
@@ -148,6 +159,8 @@ if __name__ == '__main__':
 
             pred_label_dist[source][pred_answer_idx] += 1
 
+            assert 0 <= mi['ground_truth_idx'] < len(pred_probs)
+            print(mi['ground_truth_idx'], pred_answer_idx, mi['ground_truth_idx'] == pred_answer_idx, len(pred_probs))
             if pred_answer_idx == mi['ground_truth_idx']:
                 accuracy[source][0] += 1.
             accuracy[source][1] += 1.
@@ -158,23 +171,6 @@ if __name__ == '__main__':
                 print(f'{prev_source}: Accuracy={acc}%. Likelihood={round(sum(accuracy[prev_source][2]) / len(accuracy[prev_source][2]), 2)}')
 
             prev_source = source
-
-    # encodings = tokenizer(prompts, padding=True, max_length=4096)
-
-    # outputs = llm.generate(prompts, sampling_params)
-
-    # Print the outputs.
-    # for source, output, label in zip(sources, outputs, labels):
-    #     prompt = output.prompt
-    #     generated_text = output.outputs[0].text.strip()
-    #     print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
-
-    #     assert label in {'A', 'B', 'C', 'D'}
-    #     # assert generated_text in {'A', 'B', 'C', 'D'}
-
-    #     if generated_text.lower() == label.lower():
-    #         accuracy[source][0] += 1
-    #     accuracy[source][1] += 1
 
     print('Drumroll...')
     for source, acc in accuracy.items():

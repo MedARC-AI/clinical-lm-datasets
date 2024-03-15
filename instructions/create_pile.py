@@ -26,7 +26,7 @@ class Source:
     hf_path: str
 
 
-SOURCES = [
+CONFIGS = [
     Source(name='multimedqa', hf_path='multimedqa/dataset_hf'),
     # Source(name='medalpaca_flashcards', hf_path='medalpaca/flashcards_hf'),
     # Source(name='medalpaca_wikidoc_patient', hf_path='medalpaca/wikidoc_patient_hf'),
@@ -64,11 +64,15 @@ if __name__ == '__main__':
         else:
             args.out_dir = os.path.join(PILE_DIR, 'dataset_hf')
 
+    if os.path.exists(args.out_dir):
+        print(f'{args.out_dir} exists already. Before re-running, run "rm -rf {args.out_dir}"')
+        exit(0)
+
     new_splits = {'train': [], 'validation': [], 'test': []}
     stats = []
-    for source in SOURCES:
-        in_dir = os.path.join(BASE_DIR, source.hf_path)
-        print(f'Loading {source.name} from {in_dir}')
+    for config in CONFIGS:
+        in_dir = os.path.join(BASE_DIR, config.hf_path)
+        print(f'Loading {config.name} from {in_dir}')
         dataset = load_from_disk(in_dir)
 
         if type(dataset) != DatasetDict:
@@ -107,31 +111,38 @@ if __name__ == '__main__':
             if 'source' in split_data.features:
                 print('Existing column named source. Will not be re-writing it!')
 
-            split_data = split_data.map(lambda row: {'source': row['source'] if 'source' in row else source.name})
+            split_data = split_data.map(lambda row: {'source': row['source'] if 'source' in row else config.name})
 
-            if split == 'train' and len(split_data) > args.max_train_size:
-                print(f'We have more training examples than allowed: {len(split_data)} / {args.max_train_size}')
-                print(f'Taking a random sample of {args.max_train_size}')
-                split_data = split_data.shuffle(seed=1992).select(range(args.max_train_size))
+            split_data_sampled = []
+            for source in list(set(split_data['source'])):
+                split_data_source = split_data.filter(lambda row: row['source'] == source)
+                if split == 'train' and len(split_data_source) > args.max_train_size:
+                    print(f'We have more training examples than allowed: {len(split_data_source)} / {args.max_train_size}')
+                    print(f'Taking a random sample of {args.max_train_size}')
+                    split_data_source = split_data_source.shuffle(seed=1992).select(range(args.max_train_size))
+                
+                stats.append({
+                    'source': source,
+                    'split': split,
+                    'path': in_dir,
+                    'tokens': sum(split_data_source['num_tokens']),
+                    'examples': len(split_data_source),
+                })
 
-            stats.append({
-                'source': source.name,
-                'split': split,
-                'path': in_dir,
-                'tokens': sum(split_data['num_tokens']),
-                'examples': len(split_data),
-            })
+                split_data_sampled.append(split_data_source)
 
-            meta_cols = [x for x in split_data.features if x not in MANDATORY_COLS]
+            split_data_sampled = concatenate_datasets(split_data_sampled)
+
+            meta_cols = [x for x in split_data_sampled.features if x not in MANDATORY_COLS]
 
             if len(meta_cols) > 0:
-                split_data = split_data.map(
+                split_data_sampled = split_data_sampled.map(
                     lambda row: {'meta': json.dumps({k: row[k] for k in meta_cols})},
                     remove_columns=meta_cols,
                     num_proc=32
                 )
 
-            new_splits[split].append(split_data)
+            new_splits[split].append(split_data_sampled)
 
     new_splits = {k: concatenate_datasets(v) for k, v in new_splits.items()}
     

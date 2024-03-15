@@ -48,12 +48,12 @@ ALL_CONFIGS = [
     ),
     MultiMedQAConfigs(
         name='medmcqa',
-        hf_args=('medmcqa', ),
+        hf_args=('/weka/home-griffin/clinical_instructions/medmcqa/dataset_hf', ),
         instruction='Answer this multiple-choice question on {} from the AIIMS & NEET PG entrance medical licensing exams by writing the letter associated with the correct answer.',
         input_to_prompt=input_to_prompt_medmcqa,
         input_to_target=input_to_target_medmcqa,
         cot_col='exp',
-        num_options=4
+        num_options=4,
     ),
     MultiMedQAConfigs(
         name='medqa',
@@ -104,7 +104,10 @@ if __name__ == '__main__':
         
         for split in ['train', 'validation', 'test']:
             config_split_name = getattr(config, f'{split}_split')
-            if config_split_name not in dataset:
+            if config_split_name is None:
+                print(f'Make sure there really is no {config_split_name} for {config.name}...')
+                continue
+            elif config_split_name not in dataset:
                 print(f'{config.name} has no {config_split_name} split. Make sure you have correct split names.')
                 print(f'Available options are --> ' + ', '.join(list(dataset.keys())))
                 continue
