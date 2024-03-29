@@ -12,7 +12,7 @@ from openai import AzureOpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from tabulate import tabulate
 
-from gen_labels import *
+from filter.llm_based.teacher.gen_labels import *
 
 
 

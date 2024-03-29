@@ -4,6 +4,7 @@ set -e
 
 DIMENSION=$1
 EXPERIMENT=$2
+
 DATA_DIR=/weka/home-griffin/quality_filter/${DIMENSION}
 export WANDB_PROJECT=quality-filter
 export WANDB_ENTITY=griffin-adams
@@ -28,8 +29,8 @@ accelerate launch --config_file $ACCELERATE_CONFIG train_classifier.py \
     --bf16 \
     --save_total_limit 3 \
     --max_steps 100000 \
-    --save_steps 2500 \
-    --eval_steps 2500 \
+    --save_steps 10000 \
+    --eval_steps 10000 \
     --save_strategy steps \
     --logging_strategy steps \
     --logging_steps 10 \

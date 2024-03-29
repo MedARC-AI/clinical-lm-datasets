@@ -167,4 +167,6 @@ wandb
 slurm*.out
 memory_snapshot.pickle
 logs/
+pretrain_logs/
+finetune_logs/
 *.out

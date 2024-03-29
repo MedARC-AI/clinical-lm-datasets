@@ -24,3 +24,7 @@ source envs/data/bin/activate
 cd clinical-lm-datasets
 
 python3 filter/llm_based/gen_labels.py --dimension $DIMENSION --chunk $CHUNK_IDX --num_chunks $NUM_CHUNKS
+
+
+
+

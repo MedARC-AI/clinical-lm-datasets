@@ -67,10 +67,17 @@ from peft.tuners import PrefixEncoder, PromptEmbedding, PromptEncoder
 
 # For different model types, we'll want to import the right class for the
 # check_fn in activation checkpointing (LlamaDecoderLayer for llama models for example)
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer
-from transformers.models.mistral.modeling_mistral import MistralDecoderLayer
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LLAMA_ATTENTION_CLASSES, LlamaMLP
+from transformers.models.qwen2.modeling_qwen2 import QWEN2_ATTENTION_CLASSES, Qwen2DecoderLayer, Qwen2MLP
 # Set the target class for activation checkpointing here:
 GC_LAYER_CLASS = LlamaDecoderLayer
+
+
+PARAM_NAMES = {
+    'llama': {'mlp': LlamaMLP, 'attention_classes': LLAMA_ATTENTION_CLASSES, 'decoder_layer': LlamaDecoderLayer},
+    'qwen': {'mlp': Qwen2MLP, 'attention_classes': QWEN2_ATTENTION_CLASSES, 'decoder_layer': Qwen2DecoderLayer},
+}
+
 
 # To get rid of tokenizers warnings for now
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -80,6 +87,21 @@ try:
     import wandb
 except ImportError:
     pass
+
+
+def filter_by_source(dataset, source_str):
+    if len(source_str) == 0:
+        print('No filters provided')
+        return dataset
+
+    source_list = [x.strip() for x in source_str.split(',') if len(x.strip()) > 0]
+    avail_sources = set(dataset['source'])
+    for src in source_list:
+        assert src in avail_sources
+    
+    source_filter = set(source_list)
+    return dataset.filter(lambda row: row['source'] in source_filter)
+
 
 class Logger:
     def __init__(self, args, log_to="stdout", experiment="default", project_name="fsdp_qlora", entity=None, rank=0):
@@ -312,7 +334,7 @@ class InstructionDataset(Dataset):
             example, dtype=torch.int64
         )
         labels = copy.deepcopy(example)
-        labels[: len(prompt)] = -1
+        labels[:len(prompt)] = -1
         example_mask = example.ge(0)
         label_mask = labels.ge(0)
         example[~example_mask] = 0
@@ -371,6 +393,55 @@ def get_h5_dataloader(args:Dict, global_rank, world_size):
 
 # And to get the dataloader
 def get_hf_dataloader(args:Dict, split_data, tokenizer, global_rank, world_size, split: str = None):
+    """Creates a dataset and appropriate dataloader with distributed sampler."""
+    bs = args["batch_size"] if split == 'train' else args["eval_batch_size"]
+
+    # Truncate dataset so it's evenly divisible by grad_accumulation_steps
+    split_data = split_data.select(range(0, len(split_data)-len(split_data)%(bs*args["gradient_accumulation_steps"])))
+
+    print(f'Loaded {len(split_data)} {split} examples.')
+
+    sources = None
+    if 'source' in split_data.features:
+        sources = list(sorted(list(set(split_data['source']))))
+        print(sources)
+
+    if split in {'train', 'validation'}:
+        split_data = InstructionDataset(split_data, tokenizer, style="medqa")
+    else:
+        raise Exception(f'Unrecognized split --> {split}')
+
+    # Collate function
+    def collate_fn(batch, with_attention_mask=False):
+        # To list of tensors
+        input_ids = [torch.tensor(item['input_ids']) for item in batch]
+        labels = [torch.tensor(item['labels']) for item in batch]
+        # Pad + truncate
+        input_ids = pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id)[:, :args["context_length"]]
+        if with_attention_mask:
+            attention_masks = [torch.tensor(item['attention_mask']) for item in batch]
+            attention_masks = pad_sequence(attention_masks, batch_first=True, padding_value=0)[:, :args["context_length"]]
+        else:
+            attention_masks = None
+        labels = pad_sequence(labels, batch_first=True, padding_value=-100)[:, :args["context_length"]]
+        # Return dict
+        collated = {'input_ids': input_ids, 'attention_mask': attention_masks, 'labels': labels}
+
+        if 'meta' in batch[0]:
+            collated['meta'] = [item['meta'] for item in batch]
+
+        return collated
+
+    # For distributed training, use DistributedSampler
+    sampler = DistributedSampler(split_data, seed=args["seed"], rank=global_rank, num_replicas=world_size)
+
+    # Use the custom collate function in DataLoader
+    dataloader = DataLoader(split_data, batch_size=bs, collate_fn=collate_fn, sampler=sampler)
+
+    return dataloader, sources
+
+
+def get_hf_mcqa_dataloader(args:Dict, split_data, tokenizer, global_rank, world_size, split: str = None):
     """Creates a dataset and appropriate dataloader with distributed sampler."""
     bs = args["batch_size"] if split == 'train' else args["eval_batch_size"]
 
@@ -487,17 +558,29 @@ def save_checkpoint(args, model, rank, print_func, steps):
             return out_fn
         return None
 
-# Wrap the model (LoRA policy from llama-recipes):
-# This checks for lora layers (has weight and requires_grad)
-def create_default_auto_wrap_policy():
+
+def get_wrapping_policy(model_class):
+    model_class_types = PARAM_NAMES[model_class]
+
     def lambda_policy_fn(module):
         return (
             len(list(module.named_children())) == 0
             and getattr(module, "weight", None) is not None
             and module.weight.requires_grad
         )
+
+    # def self_attn_policy_fn(module):
+    #     # Check module name is self_attn.
+    #     return isinstance(module, tuple(model_class_types['attention_classes'].values()))
+
+    # def mlp_policy_fn(module):
+    #     # Check module name is self_attn.
+    #     return isinstance(module, model_class_types['mlp'])
+
     lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
-    transformer_layer_name = LlamaDecoderLayer
+    # self_attn_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=self_attn_policy_fn)
+    # mlp_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=mlp_policy_fn)
+    transformer_layer_name = model_class_types['decoder_layer']
     transformer_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
         transformer_layer_cls=(
@@ -507,7 +590,10 @@ def create_default_auto_wrap_policy():
             transformer_layer_name,
         ),
     )
-    return functools.partial(_or_policy, policies=[lambda_policy, transformer_wrap_policy])
+    policies = [lambda_policy, transformer_wrap_policy]
+    # if custom_policy:
+    #     policies.extend([self_attn_policy, mlp_policy])
+    return functools.partial(_or_policy, policies=policies)
 
 
 # Custom QLORA module.
@@ -548,7 +634,7 @@ class QLORA(nn.Module):
         return result
 
 
-def run_validation(args, model, rank, val_dataloader, autocast):
+def run_mcqa_validation(args, model, rank, val_dataloader, autocast):
     sources = ['avg'] + args['sources']
     accuracy = torch.zeros(3 * len(sources)).to(rank)
 
@@ -591,14 +677,44 @@ def run_validation(args, model, rank, val_dataloader, autocast):
     return accuracy, sources
 
 
+def run_validation(args, model, rank, val_dataloader, autocast):
+    val_losses = torch.zeros(2).to(rank)
+
+    total = min(args['max_val_batches'], len(val_dataloader))
+    for batch_idx, batch in tqdm(enumerate(val_dataloader), total=total):
+        bs = batch['input_ids'].shape[0]
+
+        if batch_idx == args["max_val_batches"]:
+            break
+
+        # Forward pass
+        with model.no_sync(), torch.no_grad():
+            with autocast:
+                output = model(
+                    input_ids=batch['input_ids'].to(rank),
+                    labels=batch['labels'].to(rank),
+                )
+                loss = output.loss
+
+                val_losses[0] += loss.item() * bs
+                val_losses[1] += bs
+
+    return val_losses
+
+
 # Main function, run on each process
 # def fsdp_main(rank:int, world_size:int, args:Dict):
-def fsdp_main(args, global_rank, local_rank, world_size):
+def fsdp_main(local_rank, args, world_size, global_rank=None):
     print_func = tqdm.write if args["log_to"] == 'tqdm' else print
 
-    # Setup and initialize the process group
-    # os.environ['MASTER_ADDR'] = args["master_addr"]
-    # os.environ['MASTER_PORT'] = args["master_port"]
+    if global_rank == None: # mp.spawn is used for single node so local_rank = global_rank
+        global_rank = local_rank
+
+    # Setup and initialize the process group only if not set outside by sbatch script
+    if 'MASTER_ADDR' not in os.environ:
+        os.environ['MASTER_ADDR'] = args["master_addr"]
+        os.environ['MASTER_PORT'] = args["master_port"]
+    # Otherwise, no need to re-assign
 
     dist.init_process_group("nccl", rank=global_rank, world_size=world_size)
     torch.cuda.set_device(local_rank)
@@ -641,13 +757,30 @@ def fsdp_main(args, global_rank, local_rank, world_size):
     val_dataloader = None
     if args["train_mode"] == "pretrain":
         dataloader = get_h5_dataloader(args, global_rank, world_size)
+
+        data_dir = args['dataset_for_pretrain_validation']
+        val = load_from_disk(data_dir)['validation']
+        val_dataloader, sources = get_hf_mcqa_dataloader(args, val, tokenizer, global_rank, world_size, split="validation")
+        print(sources)
+        args["sources"] = sources
     elif args["train_mode"] == "debug":
         dataloader = get_fake_dataloader()
     elif args["train_mode"] == "finetune":
         data_dir = args['dataset']
         dataset = load_from_disk(data_dir)
-        dataloader, _ = get_hf_dataloader(args, dataset['train'], tokenizer, global_rank, world_size, split="train")
-        val_dataloader, sources = get_hf_dataloader(args, dataset['validation'], tokenizer, global_rank, world_size, split="validation")
+        train = filter_by_source(dataset['train'], args['train_source_filters'])
+        val = filter_by_source(dataset['validation'], args['validation_source_filters'])
+        dataloader, _ = get_hf_dataloader(args, train, tokenizer, global_rank, world_size, split="train")
+        val_dataloader, sources = get_hf_dataloader(args, val, tokenizer, global_rank, world_size, split="validation")
+        print(sources)
+        args["sources"] = sources
+    elif args["train_mode"] == "finetune_mcqa":
+        data_dir = args['dataset']
+        dataset = load_from_disk(data_dir)
+        train = filter_by_source(dataset['train'], args['train_source_filters'])
+        val = filter_by_source(dataset['validation'], args['validation_source_filters'])
+        dataloader, _ = get_hf_mcqa_dataloader(args, train, tokenizer, global_rank, world_size, split="train")
+        val_dataloader, sources = get_hf_mcqa_dataloader(args, val, tokenizer, global_rank, world_size, split="validation")
         print(sources)
         args["sources"] = sources
     else:
@@ -753,14 +886,15 @@ def fsdp_main(args, global_rank, local_rank, world_size):
     logger.log({"memory_after_model_creation": torch.cuda.memory_allocated(local_rank)}, global_rank)
 
     # Wrap model with llama-recipies LoRA policy
-    my_auto_wrap_policy = create_default_auto_wrap_policy()
+    auto_wrap_policy = get_wrapping_policy(args["model_class"])
 
     print("Wrapping model w/ FSDP", global_rank, local_rank)
+    # TODO switch back to HYBRID_SHARD _HYBRID_SHARD_ZERO2
     sharding_strategy = ShardingStrategy.HYBRID_SHARD if not args['use_ddp'] else ShardingStrategy.NO_SHARD
     model = FSDP(
         model,
         sharding_strategy=sharding_strategy,
-        auto_wrap_policy=my_auto_wrap_policy,
+        auto_wrap_policy=auto_wrap_policy,
         use_orig_params=False,
         cpu_offload=CPUOffload(offload_params=True) if args["use_cpu_offload"] else None,
         limit_all_gathers=True, # See https://github.com/pytorch/pytorch/issues/91165
@@ -782,7 +916,7 @@ def fsdp_main(args, global_rank, local_rank, world_size):
             checkpoint_wrapper,
             checkpoint_impl=CheckpointImpl.NO_REENTRANT,
         )
-        check_fn = lambda submodule: isinstance(submodule, GC_LAYER_CLASS)
+        check_fn = lambda submodule: isinstance(submodule, PARAM_NAMES[args["model_class"]]["decoder_layer"])
         print("Applying activation checkpointing", local_rank)
         apply_activation_checkpointing(
             model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=check_fn
@@ -863,10 +997,6 @@ def fsdp_main(args, global_rank, local_rank, world_size):
                     token_preds = torch.argmax(shift_logits, dim=1).squeeze()
                     token_accuracy = (token_preds == shift_labels).sum() / len(shift_labels)
 
-                print('\n\n')
-                print('RAW HF LOSS: ', str(float(loss.item())))
-                print('\n\n')
-
                 # Scale loss for gradient accumulation
                 loss = loss / gradient_accumulation_steps
 
@@ -910,18 +1040,30 @@ def fsdp_main(args, global_rank, local_rank, world_size):
                         model.eval()
                         if global_rank == 0:
                             print(f"Starting validation run @ step #{steps}...")
-                        val_metrics, keys = run_validation(args, model, local_rank, val_dataloader, autocast)
 
-                        dist.all_reduce(val_metrics, op=dist.ReduceOp.SUM)
-                        if global_rank == 0:
-                            if args["log_to"] == 'wandb':
-                                for kidx, k in enumerate(keys):
-                                    offset = kidx * 3
-                                    denom = val_metrics[offset + 0]
-                                    logger.log({f"validation/{k}_accuracy": val_metrics[offset + 1] / denom}, global_rank)
-                                    logger.log({f"validation/{k}_answer_likelihood": val_metrics[offset + 2] / denom}, global_rank)
+                        if args["train_mode"] in {'finetune_mcqa', 'pretrain'}:
+                            val_metrics, keys = run_mcqa_validation(args, model, local_rank, val_dataloader, autocast)
 
-                            print(f"Resuming training from step #{steps}...")
+                            dist.all_reduce(val_metrics, op=dist.ReduceOp.SUM)
+                            if global_rank == 0:
+                                if args["log_to"] == 'wandb':
+                                    for kidx, k in enumerate(keys):
+                                        offset = kidx * 3
+                                        denom = val_metrics[offset + 0]
+                                        logger.log({f"validation/{k}_accuracy": val_metrics[offset + 1] / denom}, global_rank)
+                                        logger.log({f"validation/{k}_answer_likelihood": val_metrics[offset + 2] / denom}, global_rank)
+
+                                print(f"Resuming training from step #{steps}...")
+                        else:
+                            assert args["train_mode"] == "finetune"  # Regular finetune reports just validation loss for now
+                            val_losses = run_validation(args, model, local_rank, val_dataloader, autocast)
+                            dist.all_reduce(val_losses, op=dist.ReduceOp.SUM)
+                            val_loss = val_losses[0] / val_losses[1]
+                            if global_rank == 0:
+                                if args["log_to"] == 'wandb':
+                                    logger.log({f"validation/loss": val_loss}, global_rank)
+
+                                print(f"Resuming training from step #{steps}...")
                         model.train()
                     ckpt_fn = save_checkpoint(args, model, global_rank, print_func, steps)
 
@@ -937,25 +1079,9 @@ def fsdp_main(args, global_rank, local_rank, world_size):
                                 print('The below file was attempted to be remove but it doesn\'t exist. Debug this.')
                                 print(ckpt_files[0])
 
-            # Log memory usage after backwards
-            # if batch_idx == 0 and epoch == 0:
-            #     logger.log({"memory_after_backward": torch.cuda.memory_allocated(rank)}, rank)
-
-            # Print + log peak memory usage for the whole first step of training
-            # if batch_idx == 0 and epoch == 0:
-            #     peak_memory = torch.cuda.max_memory_allocated(rank)
-            #     if args["verbose"]:
-            #         print_func(f"Peak memory usage (training): {peak_memory/1e9:.2f}GB", rank)
-            #         if args["log_to"] == 'wandb':
-            #             logger.log({"memory_peak": peak_memory}, rank)
-
             # Delete the output so more memory frees up before the next forward pass
             output = None
             loss = None
-
-            # Stop logging memory (first iter)
-            # if batch_idx==0 and rank == 0 and epoch == 0 and args['profile_memory']:
-            #     torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
 
             # Log loss every gradient update steps
             if accumulate_grads:
@@ -1025,6 +1151,9 @@ if __name__ == '__main__':
         gradient_accumulation_steps: int = 1, # How many steps to accumulate gradients over (increases effective batch size)
         num_epochs: int = 1, # How many epochs of training to do
         dataset: Param("") = "alpaca_sample", # alpaca, alpaca_sample (for a 128-sample test) or "dummy" for 16 long dummy samples
+        dataset_for_pretrain_validation: str = "",
+        train_source_filters: str = "",
+        validation_source_filters: str = "",
         use_ddp: bool_arg = False, # Whether to use DDP instead of FSDP with full sharding
         use_gradient_checkpointing: bool_arg = True, # Whether to use fsdp's activation checkpointing
         use_cpu_offload: bool_arg = False, # Whether to use fsdp's cpu offload
@@ -1066,6 +1195,15 @@ if __name__ == '__main__':
 
         # Get all args which will be passed to fsdp_main
         args = dict(locals())
+
+        if 'llama' in args["model_name"].lower():
+            args["model_class"] = "llama"
+        elif 'qwen' in args["model_name"].lower():
+            args["model_class"] = "qwen"
+        else:
+            print(PARAM_NAMES.keys())
+            raise Exception(f'Unknown model provided --> ' + args["model_name"])
+
         set_seed(args['seed'])
         if args['verbose']: print(args)
 
@@ -1085,14 +1223,19 @@ if __name__ == '__main__':
         elif args["no_sync"] and args["gradient_accumulation_steps"] == 1:
             args["no_sync"] = False
 
-        # # Run
-        # mp.spawn(
-        #     fsdp_main,
-        #     args=(world_size, args),
-        #     nprocs=world_size,
-        #     join=True
-        # )
+        if 'RANK' in os.environ:
+            print('Launched with accelerate / torchrun -- using provided env variables for RANK and LOCAL_RANK.')
+            global_rank = int(os.environ['RANK'])
+            local_rank = int(os.environ['LOCAL_RANK'])
+            fsdp_main(local_rank, args, world_size=world_size, global_rank=global_rank)
+        else:
+            print('Sharding with torch.mp...')
+            # Run
+            mp.spawn(
+                fsdp_main,
+                args=(args, world_size),
+                nprocs=world_size,
+                join=True
+            )
+        
 
-        global_rank = int(os.environ['RANK'])
-        local_rank = int(os.environ['LOCAL_RANK'])
-        fsdp_main(args, global_rank, local_rank, world_size=world_size)

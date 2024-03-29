@@ -1,14 +1,13 @@
 #!/bin/bash
-#SBATCH --nodes=16
-#SBATCH --account="medarc"
-#SBATCH --job-name="pubmed_ft"
+#SBATCH --nodes=8
+#SBATCH --account="overtopmedarc"
 #SBATCH -D .
 #SBATCH --ntasks-per-node=1 # number of MP tasks
 #SBATCH --gpus-per-task=8 # number of MP tasks
 #SBATCH --gpus-per-node=8
-#SBATCH --output=logs/O-%A-%a.out
-#SBATCH --error=logs/E-%A-%a.out
-#SBATCH --partition=a40
+#SBATCH --output=pretrain_logs/O-%A-%a.out
+#SBATCH --error=pretrain_logs/E-%A-%a.out
+#SBATCH --partition=h80i
 #SBATCH --open-mode=append
 #SBATCH --exclusive
 
@@ -22,7 +21,7 @@ fi
 # COMMAND LINE ARGS
 # ***********
 CONFIG=$1  # Data mixture "reweighting_config"
-EXPERIMENT=$2 # Run Name for logging to Wandb
+EXPERIMENT=$2  # Run Name for logging to Wandb
 CONTEXT_LENGTH=$3  # 2048
 # ***********
 
@@ -50,20 +49,41 @@ PER_DEVICE_BS=0
 
 if [ $CONTEXT_LENGTH -eq 2048 ]; then
     TARGET_BATCH_SIZE=1024
-    PER_DEVICE_BS=8
+    if [ $MODEL == "llama2" ]; then
+        PER_DEVICE_BS=8
+        USE_CPU_OFFLOAD=false
+    else
+        PER_DEVICE_BS=8
+        USE_CPU_OFFLOAD=false
+    fi
 elif [ $CONTEXT_LENGTH -eq 4096 ]; then
     TARGET_BATCH_SIZE=512
-    PER_DEVICE_BS=4
+    if [ $MODEL == "llama2" ]; then
+        PER_DEVICE_BS=8
+        USE_CPU_OFFLOAD=false
+    else
+        PER_DEVICE_BS=1
+        USE_CPU_OFFLOAD=true
+    fi
 elif [ $CONTEXT_LENGTH -eq 8192 ]; then
     TARGET_BATCH_SIZE=512
-    PER_DEVICE_BS=4
+    if [ $MODEL == "llama2" ]; then
+        PER_DEVICE_BS=4
+        USE_CPU_OFFLOAD=false
+    else
+        PER_DEVICE_BS=2
+        USE_CPU_OFFLOAD=false
+        # If size == 7 do the below...
+        # PER_DEVICE_BS=1
+        # USE_CPU_OFFLOAD=true
+    fi
 else
     echo "Unrecognized Context Length {$CONTEXT_LENGTH}"
     exit 1
 fi
 
 LR=3e-4
-NUM_EPOCHS=1
+NUM_EPOCHS=3
 WARMUP_FRACTION=0.005 # % of training steps over which to warmup lr
 GRAD_CLIPPING=true
 GRAD_NORM=1.0
@@ -74,7 +94,7 @@ GRAD_NORM=1.0
 # ***********
 WANDB_ENTITY="griffin-adams"
 WANDB_PROJECT="stable-health"
-SAVE_STEP_FREQUENCY=500  # Save checkpoint every N steps
+SAVE_STEP_FREQUENCY=5000  # Save and validate every N steps
 OUT_DIR="/weka/home-griffin/weights/pretrain/${MODEL}/${EXPERIMENT}"
 echo "Will be saving weights to ${OUT_DIR}"
 mkdir -p $OUT_DIR
@@ -83,6 +103,8 @@ if [ ! -f $DATASET ]; then
   echo "Error: ${DATASET} does not exist."
   exit 1
 fi
+# Validation dataset
+VALIDATION_DATASET="/weka/home-griffin/clinical_instructions/multimedqa/dataset_hf_artificial"
 export HF_HOME="/weka/home-griffin/cache/huggingface"
 export HF_DATASETS_CACHE="/weka/home-griffin/cache/huggingface/datasets/"
 # ***********
@@ -157,8 +179,9 @@ export SCRIPT_ARGS=" \
     --num_epochs $NUM_EPOCHS \
     --train_type full \
     --use_gradient_checkpointing true \
-    --use_cpu_offload false \
+    --use_cpu_offload $USE_CPU_OFFLOAD \
     --dataset $DATASET \
+    --dataset_for_pretrain_validation $VALIDATION_DATASET \
     --verbose true \
     --lr $LR \
     --save_model true \

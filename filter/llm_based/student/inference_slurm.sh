@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -e
+
+DIMENSION=$1
+EXPERIMENT=$2
+NUM_SHARDS=$3
+
+bash inference.sh $DIMENSION $EXPERIMENT $NUM_SHARDS

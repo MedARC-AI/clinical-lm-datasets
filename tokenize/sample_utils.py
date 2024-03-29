@@ -12,7 +12,9 @@ import itertools
 def sample_dataset(dataset, reweighting_config, target_num_tokens):
     sources = set(dataset['source'])
     cwd = os.path.dirname(os.path.abspath(__file__))
-    mixtures = pd.read_csv(os.path.join(cwd, 'mixtures', f'{reweighting_config}.csv'))
+    mixture_fn = os.path.join(cwd, 'mixtures', f'{reweighting_config}.csv')
+    print(f'Loading dataset from {mixture_fn}...')
+    mixtures = pd.read_csv(mixture_fn)
     keep_prob_by_source = dict(zip(mixtures['source'], mixtures['weight']))
 
     # Assert our re-weighting config naming matches the naming convention from the dataset

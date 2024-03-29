@@ -24,24 +24,26 @@ EVAL_DATASETS = {
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Convert a SafeTensors checkpoint into a HuggingFace dataset so it can be loaded with "from_pretrained".')
+
+    parser.add_argument('--model_name', default='Qwen/Qwen1.5-7B')
     
-    parser.add_argument('--model_name', default='Qwen/Qwen1.5-0.5B')
-    
-    parser.add_argument('--weight_dir', default='/weka/home-griffin/weights/pretrain/Qwen/Qwen1.5-0.5B')
-    parser.add_argument('--experiment', default='pubmed_v3')
+    parser.add_argument('--weight_dir', default='/weka/home-griffin/weights/pretrain/qwen')
+    parser.add_argument('--experiment', default='pubmed_qwen_7b_2k')
     parser.add_argument('-eval_pretrained', default=False, action='store_true')
-    parser.add_argument('--fewshot_n', default=5, type=int)
+    parser.add_argument('--fewshot_n', default=3, type=int)
     parser.add_argument('--source', default='all')
     parser.add_argument('--fewshot_split', default='train')
+    parser.add_argument('-overwrite', default=False, action='store_true')
     parser.add_argument('--ckpt', type=int, default=-1)  # -1 means take the last checkpoint
 
-    parser.add_argument('--dataset', default='instruction_pile')
+    parser.add_argument('--dataset', default='multimedqa')
     parser.add_argument('--batch_size', default=4, type=int)
 
     args = parser.parse_args()
 
     if args.eval_pretrained:
         model_dir = args.model_name
+        save_dir = os.path.join('/weka/home-griffin/weights', 'base', args.model_name)
     elif args.ckpt == -1:
         print(f'Searching for latest checkpoint in {args.ckpt}...')
         pattern = os.path.join(args.weight_dir, args.experiment, '*.safetensors')
@@ -53,11 +55,16 @@ if __name__ == '__main__':
         print(f'Found checkpoint --> {args.ckpt}')
         ckpt_name = 'final'
         model_dir = os.path.join(args.weight_dir, args.experiment, f'hf_{ckpt_name}')
+        save_dir = model_dir
     else:
         ckpt_name = str(args.ckpt)
         model_dir = os.path.join(args.weight_dir, args.experiment, f'hf_{ckpt_name}')
+        save_dir = model_dir
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
     if not args.eval_pretrained and not os.path.exists(model_dir):
         ckpt = os.path.join(args.weight_dir, args.experiment, f'model_state_dict_{args.ckpt}.safetensors')
         print(f'Converting {ckpt} to HF dataset...')
@@ -65,7 +72,7 @@ if __name__ == '__main__':
         print(f'Saving model to {model_dir}...')
         model.save_pretrained(model_dir)
 
-        tokenizer.save_pretrained(model_dir)      
+        tokenizer.save_pretrained(model_dir)
 
     print(f'Loading model from {model_dir}')
     model = AutoModelForCausalLM.from_pretrained(
@@ -73,13 +80,24 @@ if __name__ == '__main__':
         torch_dtype=torch.bfloat16,
         attn_implementation='sdpa',
         device_map='auto'
-    ).eval().to('cuda')
+    ).eval()  # .to('cuda')
 
-    # sampling_params = SamplingParams(temperature=0.0)
-    # model_dir = 'Qwen/Qwen1.5-0.5B'
-    # llm = LLM(model=model_dir, dtype=torch.bfloat16)
+    sample_generate = False
+    if sample_generate:
+        prompt = 'According to clinical guidelines, diabetes is best treated'
+        input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.int64).unsqueeze(0).to('cuda')
 
-    out_fn = os.path.join(model_dir, f'{args.dataset}_results.csv')
+        outputs = model.generate(input_ids, min_length=64, max_length=1024)
+        output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        print(output_text)
+
+    out_fn = os.path.join(save_dir, f'{args.dataset}_results.csv')
+
+    if os.path.exists(out_fn) and not args.overwrite:
+        print(f'{out_fn} exists. Exiting.')
+        exit(0)
+    else:
+        print(f'{out_fn} exists but will be over-writing it.')
 
     dataset = load_from_disk(EVAL_DATASETS[args.dataset])
     test = dataset['test']
@@ -94,13 +112,9 @@ if __name__ == '__main__':
     fewshot_samples = {s: [] for s in sources}
     if args.fewshot_n > 0:
         fewshot_data = dataset[args.fewshot_split]
-
         for source in sources:
             d = fewshot_data.filter(lambda row: row['source'] == source)
-            idxs = np.arange(len(d))
-            np.random.shuffle(idxs)
-            sampled_d = d.select(idxs[:args.fewshot_n])
-            fewshot_samples[source] = [x['prompt'] + x['completion'] for x in sampled_d]
+            fewshot_samples[source] = [x['prompt'] + x['completion'] for x in d]
 
     pred_label_dist = {}
     model_inputs = []
@@ -114,7 +128,10 @@ if __name__ == '__main__':
         if len(fewshot_samples[source]) == 0:
             input = prompt
         else:
-            input = '\n\n**********\n\n'.join(fewshot_samples[source] + [prompt])
+            # Add few-shot
+            sampled_fewshot = list(np.random.choice(fewshot_samples[source], args.fewshot_n))
+            np.random.shuffle(sampled_fewshot)
+            input = '\n\n**********\n\n'.join(sampled_fewshot + [prompt])
 
         input_ids = torch.tensor(tokenizer.encode(input), dtype=torch.int64)
     
@@ -160,7 +177,6 @@ if __name__ == '__main__':
             pred_label_dist[source][pred_answer_idx] += 1
 
             assert 0 <= mi['ground_truth_idx'] < len(pred_probs)
-            print(mi['ground_truth_idx'], pred_answer_idx, mi['ground_truth_idx'] == pred_answer_idx, len(pred_probs))
             if pred_answer_idx == mi['ground_truth_idx']:
                 accuracy[source][0] += 1.
             accuracy[source][1] += 1.
@@ -173,10 +189,17 @@ if __name__ == '__main__':
             prev_source = source
 
     print('Drumroll...')
+    out_lines = []
     for source, acc in accuracy.items():
-        print(f'{source}: Accuracy={round(acc[0] / acc[1] * 100, 2)}%. Likelihood={round(sum(acc[2]) / len(acc[2]), 2)}')
-        print('Prediction Label Bias Analysis')
+        out_lines.append(f'{source}: Accuracy={round(acc[0] / acc[1] * 100, 2)}%. Likelihood={round(sum(acc[2]) / len(acc[2]), 2)}')
+        out_lines.append('Prediction Label Bias Analysis')
         for i in range(len(pred_label_dist[source])):
             ct = pred_label_dist[source][i]
             letter = string.ascii_uppercase[i]
-            print(f'\t-{letter} predicted {ct} times.')
+            out_lines.append(f'\t-{letter} predicted {ct} times.')
+
+    print('\n'.join(out_lines))
+    os.makedirs(save_dir, exist_ok=True)
+
+    with open(out_fn, 'r') as fd:
+        fd.write('\n'.join(out_lines))

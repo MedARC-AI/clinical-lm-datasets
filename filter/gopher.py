@@ -263,8 +263,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Running LLM-based quality filter on paragraphs for different datasets.')
 
     parser.add_argument('--pile_path', default='/weka/home-griffin/clinical_pile/v1/dedup/sentence/dataset.jsonl')
-    parser.add_argument('--out_fn', default='/weka/home-griffin/clinical_pile/v1/dataset_clean.jsonl')
-    parser.add_argument('--removed_out_dir', default='/weka/home-griffin/clinical_pile/v1/docs_removed_by_gopher')
     parser.add_argument('--excluded_sources', default='code|gutenberg_books')
 
     args = parser.parse_args()
@@ -276,8 +274,6 @@ if __name__ == '__main__':
     # We use "#" for document structure. Don't want to remove documents with these symbols
     # Max doc words should be none or else it will remove all books.
     quality_filter = GopherQualityFilter(max_symbol_word_ratio=None, max_doc_words=None)
-
-    print(f'Loading data from {args.pile_path} and writing saved outputs to {args.out_fn}')
 
     from collections import defaultdict
     removal_reasons = defaultdict(int)
@@ -300,14 +296,6 @@ if __name__ == '__main__':
             is_keep = gopher_reason is None
 
         return is_keep
-        # if is_keep:
-        #     return {'gopher_reason': None}  # , 'json': obj}
-        # else:
-        #     return {'gopher_reason': gopher_reason}  # , 'json': None}
-
-    # outputs = list(p_uimap(
-    #     process, load_dataset('json', data_files=args.pile_path, split='train')  # open(args.pile_path, 'r')
-    # ))
 
     n = len(dataset)
     dataset = dataset.filter(
@@ -318,112 +306,3 @@ if __name__ == '__main__':
     print(f'{n} -> {filt_n} after running through Gopher rules...')
 
     dataset.save_to_disk('/weka/home-griffin/clinical_pile/v1/dataset_hf_clean')
-
-    # with open(args.out_fn, 'w') as out_fd:
-    #     for out in tqdm(outputs):
-    #         if out['gopher_reason'] is None:
-    #             num_saved += 1
-    #             out_fd.write(out['json'] + '\n')
-    #         else:
-    #             num_removed += 1
-    #             removal_reasons[out['gopher_reason']] += 1
-
-    # with open(args.out_fn, 'w') as out_fd, open(args.pile_path, 'r') as in_fd:
-    #     for line in tqdm(in_fd):
-    #         line = line.strip()
-    #         obj = json.loads(line)
-
-    #         if obj['metadata']['source'] in args.excluded_sources:
-    #             is_keep = True
-    #             gopher_reason = None
-    #         else:
-    #             gopher_reason = gopher_removal_reason(obj, rep_filter, quality_filter)
-    #             is_keep = gopher_reason is None
-
-    #         if is_keep:
-    #             num_saved += 1
-    #             out_fd.write(line + '\n')
-    #         else:
-    #             num_removed += 1
-    #             assert gopher_reason is not None
-    #             removal_reasons[gopher_reason] += 1
-
-    # print(f'Num Original: {num_saved + num_removed}')
-    # print(f'Num Saved: {num_saved}')
-    # print(f'Num Removed: {num_removed}')
-
-    # print('Removal reasons...')
-    # for k, v in removal_reasons.items():
-    #     print(k + ' -> ' + str(v))
-
-    #     for row in tqdm(data):
-
-    #     for row in tqdm(set_aside):
-    #         out_fd.write(json.dumps(row) + '\n')
-
-    # if args.pile_path.endswith('jsonl'):
-    #     data = load_dataset('json', data_files=args.pile_path, streaming=True, split='train')
-    # else:
-    #     data = load_from_disk(args.pile_path)
-    # N = len(data)
-
-    # Save these sources from being filtered and add them back later
-    # print('Filtering for excluded sources...')
-    # set_aside = data.filter(
-    #     lambda row: row['metadata']['source'] in excluded_sources,
-    #     # num_proc=multiprocess.cpu_count()
-    # )
-
-    # print('Filtering out excluded sources...')
-    # data = data.filter(
-    #     lambda row: row['metadata']['source'] not in excluded_sources,
-    #     # num_proc=multiprocess.cpu_count()
-    # )
-
-    # # print(f'Setting aside {len(set_aside)} documents which we will not pass to Gopher filter.')
-    # # prev_n = len(data)
-    # print('Scoring with Gopher Quality and Repetition Filters...')
-    # data = data.map(
-    #     lambda doc: score_with_gopher(doc, rep_filter, quality_filter),
-    #     # num_proc=multiprocess.cpu_count()
-    # )
-
-    # # removed = data.filter(
-    # #     lambda row: len(row['gopher_reason']) > 1,
-    # #     # num_proc=multiprocess.cpu_count()
-    # # )
-
-    # # print(f'Saving {len(removed)} removed examples to {args.removed_out_dir} for debugging.')
-    # # removed.save_to_disk(args.removed_out_dir)
-
-    # print('Filtering out Low Quality examples...')
-    # data = data.filter(
-    #     lambda row: len(row['gopher_reason']) == 0,
-    #     # num_proc=multiprocess.cpu_count()
-    # )
-    # # n = len(data)
-
-    # # for k, ct in Counter(removed['gopher_reason']).most_common():
-    # #     print(k, ct / len(removed))
-
-    # # print(f'Removed {prev_n - n} samples removed because of Gopher Rules')
-    # data = data.remove_columns(['gopher_reason'])
-
-    # # print(f'Adding back {len(set_aside)} documents to {len(data)} Gopher-filtered documents.')
-    # # data = concatenate_datasets([set_aside, data])
-    # # print(f'Saving {len(data)} of {N} original to {args.out_dir}...')
-    # # data.save_to_disk(args.out_dir)
-
-    # # removed.cleanup_cache_files()
-
-    # print(f'Writing outputs to {args.out_fn}')
-    # with open(args.out_fn, 'w', encoding='utf-8') as out_fd:
-    #     for row in tqdm(data):
-    #         out_fd.write(json.dumps(row) + '\n')
-
-    #     for row in tqdm(set_aside):
-    #         out_fd.write(json.dumps(row) + '\n')
-    # print('Cleaning up cache...')
-    # # TBs of cache files are saved
-    # data.cleanup_cache_files()
-    # set_aside.cleanup_cache_files()

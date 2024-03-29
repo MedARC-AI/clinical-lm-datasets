@@ -34,10 +34,6 @@ if __name__ == '__main__':
     print(f'Loading dataset from {data_dir}')
     dataset = load_from_disk(data_dir)
 
-    # dataset = dataset.map(
-    #     lambda row: {'label': LABELS[round(row['label']) - 1]}
-    # )
-
     dataset = dataset.map(
         lambda row: {'label': (row['label'] - 1) / 3.0},  # Normalize 1-4 to 0-1
         num_proc=32

@@ -68,6 +68,30 @@ MODELS = {
     'gpt-4': 'gpt-4'
 }
 
+def group_headers(arr, min_para_toks):
+    new_arr = []
+    curr_para = []
+
+    for x in arr:
+        curr_para.append(x)
+
+        num_curr_toks = len('\n'.join(curr_para).split(' '))
+
+        if x.startswith('#') and '\n' not in x:  # Likely a header
+            end_para = False
+        elif num_curr_toks < min_para_toks:
+            end_para = False
+        else:
+            end_para = True
+        
+        if end_para:
+            new_arr.append('\n'.join(curr_para))
+            curr_para = []
+
+    if len(curr_para) > 0:
+        new_arr.append('\n'.join(curr_para))
+    return new_arr
+
 
 SOURCE_DESCRIPTIONS = {
     'pubmed': 'a PubMed Journal Article',
@@ -128,7 +152,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Running LLM-based quality filter on paragraphs for different datasets.')
 
     parser.add_argument('--model', default='mixtral', choices=list(MODELS.keys()))
-    parser.add_argument('--paras_per_doc', default=1)
     parser.add_argument('--excluded_sources', default=None)
     parser.add_argument('--max_para_toks', default=512, type=int)
     parser.add_argument('--min_para_toks', default=32, type=int)
@@ -209,32 +232,8 @@ if __name__ == '__main__':
             paras = re.split('\n\n', row['text'])
             paras = [p.strip() for p in paras if len(p.strip()) > 0]
 
-            def group_headers(arr):
-                new_arr = []
-                curr_para = []
-
-                for x in arr:
-                    curr_para.append(x)
-
-                    num_curr_toks = len('\n'.join(curr_para).split(' '))
-
-                    if x.startswith('#') and '\n' not in x:  # Likely a header
-                        end_para = False
-                    elif num_curr_toks < args.min_para_toks:
-                        end_para = False
-                    else:
-                        end_para = True
-                    
-                    if end_para:
-                        new_arr.append('\n'.join(curr_para))
-                        curr_para = []
-
-                if len(curr_para) > 0:
-                    new_arr.append('\n'.join(curr_para))
-                return new_arr
-
             # Sometimes headers are alone. If so, group them with next paragraph
-            paras = group_headers(paras)
+            paras = group_headers(paras, min_para_toks=args.min_para_toks)
 
             para_idx = int(np.random.randint(len(paras)))
             para = paras[para_idx]
