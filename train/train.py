@@ -69,6 +69,7 @@ from peft.tuners import PrefixEncoder, PromptEmbedding, PromptEncoder
 # check_fn in activation checkpointing (LlamaDecoderLayer for llama models for example)
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LLAMA_ATTENTION_CLASSES, LlamaMLP
 from transformers.models.qwen2.modeling_qwen2 import QWEN2_ATTENTION_CLASSES, Qwen2DecoderLayer, Qwen2MLP
+# from transformers.models.stablelm.modeling_stablelm import StableLmDecoderLayer, StableLmMLP, ATTENTION_CLASSES as STABLELM_ATTENTION_CLASSES
 # Set the target class for activation checkpointing here:
 GC_LAYER_CLASS = LlamaDecoderLayer
 
@@ -76,6 +77,7 @@ GC_LAYER_CLASS = LlamaDecoderLayer
 PARAM_NAMES = {
     'llama': {'mlp': LlamaMLP, 'attention_classes': LLAMA_ATTENTION_CLASSES, 'decoder_layer': LlamaDecoderLayer},
     'qwen': {'mlp': Qwen2MLP, 'attention_classes': QWEN2_ATTENTION_CLASSES, 'decoder_layer': Qwen2DecoderLayer},
+    # 'stable': {'mlp': StableLmMLP, 'attention_classes': STABLELM_ATTENTION_CLASSES, 'decoder_layer': StableLmDecoderLayer},
 }
 
 
@@ -226,22 +228,6 @@ def load_and_quantize(module:nn.Module, name:str, value:Tensor, device:torch.dev
     setattr(submodule, value_key, value)
 
 
-# DATASET + DATALOADERS (modified from llama recipes)
-# Formatting prompts in alpaca
-PROMPT_DICT = {
-    "prompt_input": (
-        "Below is an instruction that describes a task, paired with an input that provides further context. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:"
-    ),
-    "prompt_no_input": (
-        "Below is an instruction that describes a task. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Response:"
-    ),
-}
-
-
 class PreTokenizedDataset(Dataset):
     def __init__(self, dataset):
         self.dataset = dataset
@@ -305,25 +291,10 @@ class InstructionDataset(Dataset):
 
     def __getitem__(self, index):
         IGNORE_INDEX = -100  # The default setting in CrossEntropyLoss
-        if self.style == 'medqa':
-            ex = self.dataset[index]
-            prompt = ex['prompt']
-            example = prompt + ex['completion']
-        elif self.style == "guanaco":
-            prompt = self.dataset[index]["text"].split("### Assistant: ")[0]
-            example = self.dataset[index]["text"]
-        elif self.style == "qna":
-            prompt_template = "###Context:\n{context}\n###Question:\n{question}\n###Answer:\n"
-            sample = self.dataset[index]
-            prompt = prompt_template.format_map(sample)
-            example = prompt + sample['answer']
-        else: # Alpaca
-            ann = self.dataset[index]
-            if ann.get("input", "") == "":
-                prompt = PROMPT_DICT["prompt_no_input"].format_map(ann)
-            else:
-                prompt = PROMPT_DICT["prompt_input"].format_map(ann)
-            example = prompt + ann["output"]
+        assert self.style == 'medqa'
+        ex = self.dataset[index]
+        prompt = ex['prompt']
+        example = prompt + ex['completion']
 
         prompt = torch.tensor(
             self.tokenizer.encode(prompt), dtype=torch.int64
@@ -1072,9 +1043,9 @@ def fsdp_main(local_rank, args, world_size, global_rank=None):
                         if len(ckpt_files) > args['save_limit']:
                             print(f'Removing {ckpt_files[0]}')
                             try:
-                                assert os.path.exists(ckpt_files[0])
-                                os.remove(ckpt_files[0])
-                                ckpt_files = ckpt_files[1:]
+                                if os.path.exists(ckpt_files[0]):
+                                    os.remove(ckpt_files[0])
+                                    ckpt_files = ckpt_files[1:]
                             except:
                                 print('The below file was attempted to be remove but it doesn\'t exist. Debug this.')
                                 print(ckpt_files[0])
@@ -1200,6 +1171,8 @@ if __name__ == '__main__':
             args["model_class"] = "llama"
         elif 'qwen' in args["model_name"].lower():
             args["model_class"] = "qwen"
+        elif 'stable' in args["model_name"].lower():
+            args["model_class"] = "stable"
         else:
             print(PARAM_NAMES.keys())
             raise Exception(f'Unknown model provided --> ' + args["model_name"])

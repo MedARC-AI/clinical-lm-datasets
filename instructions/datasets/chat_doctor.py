@@ -14,12 +14,17 @@ OUT_DIR = os.path.join(CHAT_DOCTOR_DIR, 'dataset_hf')
 
 def create_prompt(row):
     input = row['input']
-    return f'<<Instruction:>> {INSTRUCTION}\n----\n<<Question:>> {input}\n----\n<<Answer:>> '
+    lines = [f'# INSTRUCTION\n{INSTRUCTION}', f'# QUESTION\n{input}', '# ANSWER\n']
+    return '\n\n'.join(lines)
 
 
 if __name__ == '__main__':
     dataset = []
     seen = set()
+
+    if os.path.exists(OUT_DIR):
+        print(OUT_DIR + 'already exists. Remove first.')
+        exit(0)
 
     print(f'Opening dialogues from {IN_FN}')
 

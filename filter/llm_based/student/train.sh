@@ -27,7 +27,7 @@ accelerate launch --config_file $ACCELERATE_CONFIG train_classifier.py \
     --warmup_steps 200 \
     --evaluation_strategy steps \
     --bf16 \
-    --save_total_limit 3 \
+    --save_total_limit 10 \
     --max_steps 100000 \
     --save_steps 10000 \
     --eval_steps 10000 \

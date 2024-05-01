@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account medarc
-#SBATCH --partition=h80i
+#SBATCH --partition=a40
 #SBATCh --mem=200gb
 #SBATCH --gpus=1
 #SBATCH --ntasks=1

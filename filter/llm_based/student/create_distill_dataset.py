@@ -6,7 +6,6 @@ import argparse
 import pandas as pd
 import numpy as np
 np.random.seed(1992)
-import torch
 from datasets import load_from_disk, DatasetDict
 
 

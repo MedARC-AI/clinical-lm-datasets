@@ -21,10 +21,10 @@ def form_target(answer, explanation):
     else:
         return answer
 
-def input_to_id_default(doc, split, idx):
+def input_to_id_default(dataset_name, doc, split, idx):
     if 'id' in doc:
         return str(doc['id'])
-    return f'{split}-{idx}'
+    return f'{dataset_name}-{split}-{idx}'
 
 
 def input_to_prompt_mmlu(doc, is_cot=False):

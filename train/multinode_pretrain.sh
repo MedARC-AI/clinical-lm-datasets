@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --nodes=8
+#SBATCH --nodes=2
 #SBATCH --account="overtopmedarc"
+#SBATCH --partition=h80i
 #SBATCH -D .
 #SBATCH --ntasks-per-node=1 # number of MP tasks
 #SBATCH --gpus-per-task=8 # number of MP tasks
 #SBATCH --gpus-per-node=8
 #SBATCH --output=pretrain_logs/O-%A-%a.out
 #SBATCH --error=pretrain_logs/E-%A-%a.out
-#SBATCH --partition=h80i
 #SBATCH --open-mode=append
 #SBATCH --exclusive
 
@@ -28,12 +28,14 @@ CONTEXT_LENGTH=$3  # 2048
 # ***********
 # MODEL CONFIG
 # ***********
-SIZE="7"
-MODEL="llama2"
-if [ $MODEL == "llama2" ]; then
-    MODEL_NAME="meta-llama/Llama-2-${SIZE}b-hf"
+SIZE="8"
+MODEL="llama3"
+if [ $MODEL == "llama3" ]; then
+    MODEL_NAME="meta-llama/Meta-Llama-3-8B"
 elif [ $MODEL == "qwen" ]; then
     MODEL_NAME="Qwen/Qwen1.5-${SIZE}B"
+elif [ $MODEL == "stable" ]; then
+    MODEL_NAME="stabilityai/stablelm-${SIZE}b-4e1t"
 else
     echo "Unrecognized Model {$MODEL}"
     exit 1
@@ -49,7 +51,7 @@ PER_DEVICE_BS=0
 
 if [ $CONTEXT_LENGTH -eq 2048 ]; then
     TARGET_BATCH_SIZE=1024
-    if [ $MODEL == "llama2" ]; then
+    if [ $MODEL == "llama3" ]; then
         PER_DEVICE_BS=8
         USE_CPU_OFFLOAD=false
     else
@@ -58,7 +60,10 @@ if [ $CONTEXT_LENGTH -eq 2048 ]; then
     fi
 elif [ $CONTEXT_LENGTH -eq 4096 ]; then
     TARGET_BATCH_SIZE=512
-    if [ $MODEL == "llama2" ]; then
+    if [ $MODEL == "llama3" ]; then
+        PER_DEVICE_BS=8
+        USE_CPU_OFFLOAD=false
+    elif [ $MODEL == "stable" ]; then
         PER_DEVICE_BS=8
         USE_CPU_OFFLOAD=false
     else
@@ -67,8 +72,8 @@ elif [ $CONTEXT_LENGTH -eq 4096 ]; then
     fi
 elif [ $CONTEXT_LENGTH -eq 8192 ]; then
     TARGET_BATCH_SIZE=512
-    if [ $MODEL == "llama2" ]; then
-        PER_DEVICE_BS=4
+    if [ $MODEL == "llama3" ]; then
+        PER_DEVICE_BS=1
         USE_CPU_OFFLOAD=false
     else
         PER_DEVICE_BS=2
@@ -82,8 +87,8 @@ else
     exit 1
 fi
 
-LR=3e-4
-NUM_EPOCHS=3
+LR=2e-5  # 3e-4
+NUM_EPOCHS=4
 WARMUP_FRACTION=0.005 # % of training steps over which to warmup lr
 GRAD_CLIPPING=true
 GRAD_NORM=1.0
@@ -186,6 +191,7 @@ export SCRIPT_ARGS=" \
     --lr $LR \
     --save_model true \
     --save_steps $SAVE_STEP_FREQUENCY \
+    --save_limit 25 \
     --log_to wandb \
     --lr_scheduler cosine \
     --train_mode pretrain \

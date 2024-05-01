@@ -101,8 +101,11 @@ if __name__ == '__main__':
 
     para_dataset = []
 
-    args.sampling_adj = args.target_keep_percent - PRECOMPUTED_AVG_SCORES[args.experiment]
-    print(f'Will be adding {args.sampling_adj} to each of the raw probablities so that we keep {args.target_keep_percent} of the original tokens.')
+    if args.target_keep_percent == -1:
+        args.sampling_adj = 0
+    else:
+        args.sampling_adj = args.target_keep_percent - PRECOMPUTED_AVG_SCORES[args.experiment]
+        print(f'Will be adding {args.sampling_adj} to each of the raw probablities so that we keep {args.target_keep_percent} of the original tokens.')
 
     for row in tqdm(data):
         text = row['text']

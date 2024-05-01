@@ -99,8 +99,10 @@ def form_cot_prompt(args, row, fewshot_examples):
         input = prompt
     else:
         # Add few-shot
-        sampled_fewshot = list(np.random.choice(fewshot_examples, args.fewshot_n))
-        np.random.shuffle(sampled_fewshot)
+        idxs = np.arange(len(fewshot_examples))
+        np.random.shuffle(idxs)
+        sampled_idxs = idxs[:args.fewshot_n]
+        sampled_fewshot = [fewshot_examples[i] for i in sampled_idxs]
         input = '\n\n**********\n\n'.join(sampled_fewshot + [prompt])
 
     input += '\n\n# EXPLANATION\n'
@@ -157,7 +159,7 @@ def run_tests(args, test, fewshot_examples, llm, gen_params, logit_params, token
     
     if args.cot:
         print('Forming fewshot CoT prompts...')
-        gen_inputs = [form_cot_prompt(args, row, fewshot_examples) for row in test]    
+        gen_inputs = list(tqdm(map(lambda row: form_cot_prompt(args, row, fewshot_examples), test), total=len(test)))
         print('Generating predictions...')
         # Generate Predictions
         gen_outputs = llm.generate(gen_inputs, gen_params)
@@ -168,9 +170,11 @@ def run_tests(args, test, fewshot_examples, llm, gen_params, logit_params, token
         logit_labels = []
 
         # Print the outputs.
-        for label, output in zip(all_labels, gen_outputs):
+        for o_idx, (label, output) in enumerate(zip(all_labels, gen_outputs)):
             prompt = output.prompt
             new_text = output.outputs[0].text
+            if o_idx == 0:
+                print(new_text)
 
             if '**********' in new_text:
                 new_text = new_text.split('**********')[0]
@@ -187,6 +191,11 @@ def run_tests(args, test, fewshot_examples, llm, gen_params, logit_params, token
             if pred_label is None:
                 print(new_text)
                 gen_cot = remove_dup_sents(new_text).strip()
+                # If its gone ahead and generated new answers and explanations then remove / truncate it.
+                if '# ANSWER' in gen_cot:
+                    gen_cot = gen_cot.split('# ANSWER')[0]
+                if '# EXPLANATION' in gen_cot:
+                    gen_cot = gen_cot.split('# EXPLANATION')[0]
                 answer_prompt = '\n\n# ANSWER\n'
                 updated_inputs = prompt + gen_cot + answer_prompt    
                 logit_inputs.append(updated_inputs)

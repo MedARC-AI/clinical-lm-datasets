@@ -6,7 +6,7 @@ import os
 np.random.seed(1992)
 from itertools import chain
 import datasets
-from datasets import load_from_disk
+from datasets import concatenate_datasets, load_from_disk
 import h5py
 from tqdm import tqdm
 
@@ -15,12 +15,21 @@ from batch_tokenize import TOKENIZERS
 
 
 def pack(args):
-    data_dir = os.path.join(args.pile_dir, f'dataset_hf_clean_{args.model}_tokenized')
+    version_str = 'ask_llm_hf' if args.pile_version == 'ask_llm' else 'dataset_hf_clean'
+    data_dir = os.path.join(args.pile_dir, f'{version_str}_{args.model}_tokenized')
 
     # Don't need meta for final tokenized, packed dataset. Just "input_ids" and "source".
     raw_dataset = load_from_disk(data_dir).remove_columns('meta')
 
     reweighted_dataset, data_mixture = sample_dataset(raw_dataset, reweighting_config=args.reweighting_config, target_num_tokens=args.target_num_tokens)
+
+    if args.add_instructions:
+        instructions = load_from_disk(os.path.join(args.instruction_dir, f'dataset_hf_{args.model}_tokenized'))['train']
+        reweighted_dataset = [reweighted_dataset]
+        for _ in range(int(args.instruction_weight)):
+            reweighted_dataset.append(instructions)
+        assert len(reweighted_dataset) > 1
+        reweighted_dataset = concatenate_datasets(reweighted_dataset)
 
     # Remove any column != input_ids
     remove_cols = [col for col in reweighted_dataset.features if col != 'input_ids']
@@ -75,13 +84,21 @@ if __name__ == '__main__':
     parser.add_argument('--num_proc', default=multiprocess.cpu_count() - 16, type=int)
     parser.add_argument('--max_seq_length', type=int, default=8192, help='Sequence length for processing')
     parser.add_argument('--pile_dir', type=str, default='/weka/home-griffin/clinical_pile/v1', help='Name of the dataset to process')
+    parser.add_argument('--pile_version', type=str, default='dataset_hf_clean')
     parser.add_argument('--target_num_tokens', type=int, default=int(4e10)) # 40bn word tokens ~ 50bn tokenizer tokens
-    parser.add_argument('--reweighting_config', type=str, default='all')
+    parser.add_argument('--reweighting_config', type=str, default='target_replay')
     parser.add_argument('-all_configs', default=False, action='store_true')
     parser.add_argument('--out_dir', default='/weka/home-griffin/clinical_pile/v1/packed')
-    parser.add_argument('--model', type=str, default='llama2')
+    parser.add_argument('--model', type=str, default='llama3')
+
+    parser.add_argument('-add_instructions', default=False, action='store_true')
+    parser.add_argument('--instruction_dir', default='/weka/home-griffin/clinical_instructions/v1')
+    parser.add_argument('--instruction_weight', default=4, type=int)
 
     args = parser.parse_args()
+
+    if args.pile_version == 'ask_llm':
+        args.out_dir += '_ask_llm'
 
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -100,6 +117,7 @@ if __name__ == '__main__':
             args.out_fn = os.path.join(args.out_dir, f'{args.reweighting_config}_{args.model}_{args.max_seq_length}.memmap')
             pack(args)
     else:
-        args.out_fn = os.path.join(args.out_dir, f'{args.reweighting_config}_{args.model}_{args.max_seq_length}.memmap')
+        instruction_suffix = '_instruct' if args.add_instructions else ''
+        args.out_fn = os.path.join(args.out_dir, f'{args.reweighting_config}{instruction_suffix}_{args.model}_{args.max_seq_length}.memmap')
         pack(args)
     

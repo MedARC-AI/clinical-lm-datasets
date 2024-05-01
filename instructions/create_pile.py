@@ -1,13 +1,10 @@
 from datasets import DatasetDict, load_from_disk
 
 
-# /weka/home-griffin/clinical_instructions/medalpaca/wikidoc_patient_hf
-# /weka/home-griffin/clinical_instructions/medalpaca/wikidoc_patient_hf
-# 
-
 import os
 import json
 import regex as re
+from collections import Counter
 import argparse
 from dataclasses import dataclass
 
@@ -27,11 +24,12 @@ class Source:
 
 
 CONFIGS = [
-    Source(name='multimedqa', hf_path='multimedqa/dataset_hf'),
-    # Source(name='medalpaca_flashcards', hf_path='medalpaca/flashcards_hf'),
-    # Source(name='medalpaca_wikidoc_patient', hf_path='medalpaca/wikidoc_patient_hf'),
+    Source(name='multimedqa', hf_path='multimedqa/dataset_cot_hf_artificial'),
+    Source(name='medalpaca_flashcards', hf_path='medalpaca/flashcards_hf'),
+    Source(name='medalpaca_wikidoc_patient', hf_path='medalpaca/wikidoc_patient_hf'),
     Source(name='mednli', hf_path='mednli/dataset_hf'),
-    # Source(name='chat_doctor', hf_path='ChatDoctor/dataset_hf'),
+    Source(name='chat_doctor', hf_path='ChatDoctor/dataset_hf'),
+    Source(name='radqa', hf_path='radqa/dataset_hf')
 ]
 
 
@@ -54,7 +52,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_format', default='hf', choices=['hf', 'jsonl'])
     parser.add_argument('--out_dir', default=None)
 
-    parser.add_argument('--max_train_size', default=100000, type=int)
+    parser.add_argument('--max_train_size', default=int(1e10), type=int)
 
     args = parser.parse_args()
 
@@ -78,7 +76,7 @@ if __name__ == '__main__':
         if type(dataset) != DatasetDict:
             print('\n\n')
             print('*' * 100)
-            print('NO splits found. Assuming it is all for training.')
+            print(f'NO splits found. Assuming {config.name} is all for training.')
             print('*' * 100)
             print('\n\n')
             dataset = {'train': dataset}
@@ -95,17 +93,28 @@ if __name__ == '__main__':
                 print('*' * 100)
                 print('\n\n')
 
-            assert all([type(x) == str and len(x) > 0 for x in split_data['id']])
-            assert all([type(x) == str and len(x) > 0 for x in split_data['prompt']])
-            assert all([type(x) == str and len(x) > 0 for x in split_data['completion']])
+            try:
+                assert all([type(x) == str and len(x) > 0 for x in split_data['id']])
+                assert all([type(x) == str and len(x) > 0 for x in split_data['prompt']])
+                assert all([type(x) == str and len(x) > 0 for x in split_data['completion']])
+            except Exception as e:
+                print(e)
+                print(config.name + ' ' + split + ' failed a formatting test.')
+                raise
 
-            assert len(split_data) == len(set(split_data['id']))
+            if len(split_data) != len(set(split_data['id'])):
+                dup_ids = set([k for k, v in Counter(split_data['id']).items() if v > 1])
+                print(f'{len(dup_ids)} duplicated IDs...')
+                duped = split_data.filter(lambda row: row['id'] in dup_ids)
+                print(dup_ids)
+                print(Counter(duped['source']))
+                raise Exception('Duplicated IDs. Fix first.')
 
             if 'num_tokens' not in split_data.features:
                 print('Adding token counts which were missing...')
                 split_data = split_data.map(
                     lambda row: {'num_tokens': get_token_ct(row['prompt'])},
-                    num_proc=16
+                    num_proc=64
                 )
 
             if 'source' in split_data.features:
@@ -166,3 +175,7 @@ if __name__ == '__main__':
     stats.to_csv(out_fn, index=False)
 
     print(stats[['source', 'split', 'examples', 'tokens']].sort_values(by='tokens', ascending=False).head(n=25))
+
+    print('\n' + '*' * 50 + '\n')
+    train_stats = stats[stats['split'] == 'train']
+    print(train_stats[['source', 'split', 'examples', 'tokens']].sort_values(by='tokens', ascending=False).head(n=25))

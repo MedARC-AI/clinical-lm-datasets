@@ -168,7 +168,7 @@ if __name__ == '__main__':
 
             data_split = dataset[config_split_name]
             for idx, example in enumerate(data_split):
-                id = config.input_to_id(example, split, idx)
+                id = config.input_to_id(config.name, example, split, idx)
 
                 if config.name == 'medmcqa':
                     instruction = config.instruction.format(example['subject_name'])
@@ -176,7 +176,7 @@ if __name__ == '__main__':
                     instruction = config.instruction
 
                 explanation = example[config.cot_col] if config.cot_col is not None and args.add_cot else ''
-                if explanation is not None and args.add_cot:  # For MedMCQA sometimes they are none
+                if explanation is not None and args.add_cot and len(explanation) > 0:  # For MedMCQA sometimes they are none
                     instruction += ' Explain your answer.'
                     is_cot = True
                 else:
