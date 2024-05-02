@@ -899,7 +899,7 @@ def fsdp_main(local_rank:int, world_size:int, args:Dict):
 
     val_dataloader = None
     if args["train_mode"] == "pretrain":
-        dataloader = get_h5_dataloader(args)  # , global_rank, world_size)
+        dataloader = get_h5_dataloader(args, rank, world_size)
 
         data_dir = args['dataset_for_pretrain_validation']
         val = load_from_disk(data_dir)['validation']
