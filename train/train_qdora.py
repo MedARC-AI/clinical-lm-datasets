@@ -1427,6 +1427,7 @@ def main(
     save_model: bool_arg = False, # Save the resulting model
     save_steps: int=1000, # How frequently to save the model
     save_limit: int=10,
+    max_val_batches: int = 10000,
     output_dir: str = "output", # Output directory to save the final model to
     lora_rank: int = 64, # LoRA rank for lora/qlora
     lora_alpha: int = 16, # LoRA alpha for lora/qlora
