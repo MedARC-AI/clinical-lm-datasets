@@ -775,6 +775,19 @@ def save_checkpoint(args, model, new_layer_names, rank, steps):
                 save_file(cpu_state_dict, os.path.join(args["output_dir"], f"model_state_dict_{steps}.safetensors"))
                 print("Done", rank)
 
+def save_checkpoint(args, model, new_layer_names, rank, steps):
+    save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+    with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, save_policy):
+        cpu_state_dict = model.state_dict()
+        os.makedirs(args["output_dir"], exist_ok=True)
+        if rank==0:
+            out_fn = os.path.join(args["output_dir"], f"model_state_dict_{steps}.safetensors")
+            print(f"Saving model to {out_fn}")
+            save_file(cpu_state_dict, out_fn)
+            print(f"Done on {rank}")
+
+            return out_fn
+        return None
 
 
 def filter_by_source(dataset, source_str):
