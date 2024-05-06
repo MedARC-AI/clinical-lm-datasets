@@ -1214,6 +1214,7 @@ def fsdp_main(local_rank:int, world_size:int, args:Dict):
     steps = 0
     # Reset peak memory to track that
     torch.cuda.reset_peak_memory_stats(local_rank)
+    ckpt_files=[]
     for epoch in range(args['num_epochs']):
         update_progress_bar(progress_bar, epoch, log_loss, log_lr, rank)
         model.train()
@@ -1365,7 +1366,7 @@ def fsdp_main(local_rank:int, world_size:int, args:Dict):
                             except:
                                 print('The below file was attempted to be remove but it doesn\'t exist. Debug this.')
                                 print(ckpt_files[0])
-
+                    print('finish checkpointing stuff, rank ', rank)
         # Print + log peak memory usage for the whole fourth step of training
         if epoch == 0 and (rank == 0 or args['verbose']):
             peak_allocated_memory = torch.cuda.max_memory_allocated(local_rank)
