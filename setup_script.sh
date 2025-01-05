@@ -10,7 +10,7 @@ pip install llama-recipes fastcore "transformers!=4.38.*,!=4.39.*" --extra-index
 pip install bitsandbytes>=0.43.0
 pip install wandb
 
-git clone https://tmabraham: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@github.com/MedARC-AI/clinical-lm-datasets.git
+git clone https://tmabraham:GITHUB_KEY@github.com/MedARC-AI/clinical-lm-datasets.git
 
 export FI_EFA_FORK_SAFE=1
 export FI_EFA_USE_DEVICE_RDMA=1 # use for p4dn
